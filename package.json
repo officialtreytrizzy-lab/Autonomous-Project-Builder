@@ -2,12 +2,18 @@
   "name": "autonomous-project-builder",
   "version": "0.1.0",
   "private": true,
+  "main": "desktop/main.mjs",
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "start:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-builder.ps1",
+    "desktop:dev": "electron .",
+    "service:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-builder-service.ps1",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types tests/*.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -23,6 +29,8 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
     "eslint": "latest",
     "eslint-config-next": "latest",
     "typescript": "latest"
