@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { ESLint } from 'eslint';
 
 import {
   buildServerLaunch,
@@ -169,6 +170,12 @@ test('desktop packaging contract creates NSIS desktop and Start Menu shortcuts',
 test('TypeScript excludes generated desktop release output from repeat builds', () => {
   const config = JSON.parse(readFileSync(join(process.cwd(), 'tsconfig.json'), 'utf8'));
   assert.equal(config.exclude.includes('dist-desktop'), true);
+});
+
+test('ESLint ignores generated desktop release output', async () => {
+  const eslint = new ESLint({ cwd: process.cwd() });
+  const ignored = await eslint.isPathIgnored(join(process.cwd(), 'dist-desktop', 'generated.js'));
+  assert.equal(ignored, true);
 });
 
 test('desktop packaging generates a dedicated 512px application icon', async () => {
