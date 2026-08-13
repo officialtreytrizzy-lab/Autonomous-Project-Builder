@@ -54,6 +54,28 @@ const pageSchema = {
   },
 } as const;
 
+const briefFields = [
+  'users', 'flows', 'requirements', 'designDirection', 'dataAndIntegrations',
+  'exclusions', 'acceptanceTests', 'assumptions',
+] as const;
+
+const briefSchema = {
+  type: 'object',
+  required: ['brief', 'contradictions', 'uncertainties'],
+  properties: {
+    brief: {
+      type: 'object',
+      required: ['outcome', ...briefFields],
+      properties: {
+        outcome: { type: 'string' },
+        ...Object.fromEntries(briefFields.map((field) => [field, { type: 'array', items: { type: 'string' } }])),
+      },
+    },
+    contradictions: { type: 'array', items: { type: 'string' } },
+    uncertainties: { type: 'array', items: { type: 'string' } },
+  },
+} as const;
+
 function parseJson<T>(content: string): T {
   const normalized = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   return JSON.parse(normalized) as T;
@@ -73,6 +95,41 @@ function normalizeVisualResult(value: PageVisualResult): PageVisualResult {
       : [],
     ...(value.ocrText ? { ocrText: String(value.ocrText) } : {}),
     uncertainties: Array.isArray(value.uncertainties) ? value.uncertainties.map(String) : [],
+  };
+}
+
+function compactEvidence(evidence: EvidenceRecord[]) {
+  return evidence.map((item) => ({
+    evidenceId: item.evidenceId,
+    sourceId: item.sourceId,
+    revisionId: item.revisionId,
+    ...(typeof item.page === 'number' ? { page: item.page } : {}),
+    ...(item.region ? { region: item.region } : {}),
+    kind: item.kind,
+    content: item.content,
+    relationships: item.relationships,
+    confidence: item.confidence,
+    processingMethod: item.processingMethod,
+  }));
+}
+
+function normalizeSynthesis(value: {
+  brief?: Partial<BuildBriefContent>;
+  contradictions?: unknown[];
+  uncertainties?: unknown[];
+}) {
+  const rawBrief = value.brief || {};
+  const brief = {
+    outcome: String(rawBrief.outcome || ''),
+    ...Object.fromEntries(briefFields.map((field) => [
+      field,
+      Array.isArray(rawBrief[field]) ? rawBrief[field].map(String).filter(Boolean) : [],
+    ])),
+  } as BuildBriefContent;
+  return {
+    brief,
+    contradictions: Array.isArray(value.contradictions) ? value.contradictions.map(String).filter(Boolean) : [],
+    uncertainties: Array.isArray(value.uncertainties) ? value.uncertainties.map(String).filter(Boolean) : [],
   };
 }
 
@@ -113,6 +170,35 @@ export function createOllamaVisionClient(options: {
       const payload = await response.json() as { message?: { content?: string } };
       if (!payload.message?.content) throw new Error('Local vision returned no structured content');
       return normalizeVisualResult(parseJson<PageVisualResult>(payload.message.content));
+    },
+    async synthesize(evidence) {
+      const response = await fetchImpl(`${endpoint}/api/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(180_000),
+        body: JSON.stringify({
+          model: options.model,
+          stream: false,
+          format: briefSchema,
+          options: { temperature: 0 },
+          messages: [{
+            role: 'user',
+            content: [
+              'Synthesize a complete, production-ready Build Brief from the source evidence below.',
+              'Treat textual and visual evidence as equal first-class evidence. Preserve explicit workflows, spatial relationships, UI behavior, data rules, integrations, exclusions, and acceptance conditions.',
+              'Ground every conclusion in the supplied evidence. Do not invent features or silently guess.',
+              'List direct conflicts between sources in contradictions. List only material unknowns that genuinely require a user decision in uncertainties.',
+              'Phrase each contradiction and uncertainty as a concise question the user can resolve before approval.',
+              'The outcome must describe the complete requested product, not the document-processing task.',
+              `Evidence JSON:\n${JSON.stringify(compactEvidence(evidence))}`,
+            ].join('\n'),
+          }],
+        }),
+      });
+      if (!response.ok) throw new Error(`Local brief synthesis failed with HTTP ${response.status}`);
+      const payload = await response.json() as { message?: { content?: string } };
+      if (!payload.message?.content) throw new Error('Local brief synthesis returned no structured content');
+      return normalizeSynthesis(parseJson(payload.message.content));
     },
   };
 }

@@ -1,6 +1,6 @@
 import type { BuildBriefContent, EvidenceRecord } from './types.ts';
 import type { IntakeStore, StoredSourceManifestItem } from './store.ts';
-import { createOllamaVisionClient } from './vision.ts';
+import { createOllamaVisionClient, synthesizeBrief } from './vision.ts';
 import { processDocument } from './documents.ts';
 import { recoverVisionCapability } from './capabilities.ts';
 
@@ -53,16 +53,16 @@ async function defaultSourceProcessor(source: StoredSourceManifestItem, context:
   return { totalPages: result.visualCoverage.totalPages, inspectedPages: result.visualCoverage.inspectedPages };
 }
 
-function fallbackBrief(evidence: EvidenceRecord[]) {
-  const text = evidence.map((item) => item.content).filter(Boolean).join('\n');
-  return {
-    brief: {
-      outcome: text.slice(0, 1200) || 'Build the requested private local application.',
-      users: [], flows: [], requirements: [], designDirection: [], dataAndIntegrations: [], exclusions: [], acceptanceTests: [], assumptions: [],
-    },
-    contradictions: [],
-    uncertainties: text ? [] : ['No understandable project evidence was produced.'],
-  };
+async function defaultSynthesize(evidence: EvidenceRecord[]) {
+  if (!evidence.length) throw new Error('No understandable project evidence was produced.');
+  const capability = await recoverVisionCapability();
+  if (!capability.vision.available) {
+    throw new Error(`Local source-grounded brief synthesis is unavailable: ${capability.vision.detail}`);
+  }
+  return synthesizeBrief(
+    evidence,
+    createOllamaVisionClient({ endpoint: capability.ollama.endpoint, model: capability.vision.model }),
+  );
 }
 
 export async function runIntakeWorker(deps: WorkerDependencies) {
@@ -108,7 +108,7 @@ export async function runIntakeWorker(deps: WorkerDependencies) {
 
     deps.store.updateIntake(intake.id, { status: 'synthesizing' });
     const allEvidence = deps.store.evidenceForIntake(intake.id);
-    const synthesis = deps.synthesize ? await deps.synthesize(allEvidence) : fallbackBrief(allEvidence);
+    const synthesis = await (deps.synthesize || defaultSynthesize)(allEvidence);
     const brief = deps.store.createBriefVersion(intake.id, synthesis.brief, {
       totalPages,
       inspectedPages,
