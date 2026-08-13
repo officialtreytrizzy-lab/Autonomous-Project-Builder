@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,6 +11,11 @@ import {
   ensureDesktopDirectories,
   waitForCompatibleBuilder,
 } from '../desktop/runtime.mjs';
+import {
+  loadDesktopBuilderConfig,
+  prepareDesktopBundle,
+  validateDesktopBundle,
+} from '../scripts/prepare-desktop.mjs';
 
 test('health polling accepts only the Autonomous Builder architecture', async () => {
   const result = await waitForCompatibleBuilder({
@@ -120,4 +125,42 @@ test('Electron entry reports a secure native configuration without secrets', () 
   assert.equal(report.window.webPreferences.contextIsolation, true);
   assert.equal(report.window.webPreferences.sandbox, true);
   assert.equal(JSON.stringify(report).includes('must-not-print'), false);
+});
+
+test('staging copies standalone static assets and rejects secret-bearing file types', () => {
+  const root = mkdtempSync(join(tmpdir(), 'builder-desktop-bundle-'));
+  try {
+    const standaloneDirectory = join(root, 'standalone');
+    const staticDirectory = join(root, 'static');
+    const publicDirectory = join(root, 'public');
+    mkdirSync(standaloneDirectory, { recursive: true });
+    mkdirSync(staticDirectory, { recursive: true });
+    mkdirSync(publicDirectory, { recursive: true });
+    mkdirSync(join(standaloneDirectory, '.builder'), { recursive: true });
+    writeFileSync(join(standaloneDirectory, 'server.js'), 'server');
+    writeFileSync(join(standaloneDirectory, '.builder', 'state.db'), 'live-state-must-not-ship');
+    writeFileSync(join(staticDirectory, 'chunk.js'), 'chunk');
+    writeFileSync(join(publicDirectory, 'asset.txt'), 'asset');
+
+    prepareDesktopBundle({ standaloneDirectory, staticDirectory, publicDirectory });
+    assert.equal(existsSync(join(standaloneDirectory, '.next', 'static', 'chunk.js')), true);
+    assert.equal(existsSync(join(standaloneDirectory, 'public', 'asset.txt')), true);
+    assert.equal(existsSync(join(standaloneDirectory, '.builder')), false);
+
+    writeFileSync(join(standaloneDirectory, '.env.local'), 'MCP_AUTH_TOKEN=secret');
+    assert.throws(() => validateDesktopBundle(standaloneDirectory), /forbidden packaged file/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('desktop packaging contract creates NSIS desktop and Start Menu shortcuts', () => {
+  const config = loadDesktopBuilderConfig(join(process.cwd(), 'desktop-builder.yml'));
+  assert.equal(config.win.target, 'nsis');
+  assert.equal(config.nsis.oneClick, false);
+  assert.equal(config.nsis.createDesktopShortcut, true);
+  assert.equal(config.nsis.createStartMenuShortcut, true);
+  assert.equal(config.nsis.shortcutName, 'Autonomous Project Builder');
+  assert.equal(config.directories.output, 'dist-desktop');
+  assert.equal(config.extraResources.some((entry) => entry.to === 'builder'), true);
 });

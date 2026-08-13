@@ -1,0 +1,41 @@
+{
+  "appId": "com.trizzy.autonomous-project-builder",
+  "productName": "Autonomous Project Builder",
+  "artifactName": "Autonomous-Project-Builder-Setup-${version}.${ext}",
+  "asar": true,
+  "npmRebuild": false,
+  "directories": {
+    "output": "dist-desktop"
+  },
+  "files": [
+    "desktop/**/*",
+    "package.json",
+    "!node_modules/**/*",
+    "!.builder/**/*",
+    "!.env*",
+    "!**/*.log",
+    "!**/*.db",
+    "!**/*.sqlite*",
+    "!.vercel/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": ".next/standalone",
+      "to": "builder"
+    }
+  ],
+  "win": {
+    "target": "nsis"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Autonomous Project Builder",
+    "deleteAppDataOnUninstall": false,
+    "runAfterFinish": true
+  }
+}
+
