@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@supabase/ssr": "latest",
     "@supabase/supabase-js": "latest",
     "lucide-react": "latest",
