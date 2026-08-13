@@ -250,12 +250,16 @@ export class IntakeStore {
   }
 
   tombstoneSource(sourceId: string) {
-    const row = this.database.prepare('SELECT record_json FROM source_revisions WHERE source_id = ? ORDER BY revision DESC LIMIT 1').get(sourceId) as { record_json: string } | undefined;
-    if (!row) throw new Error(`Unknown source: ${sourceId}`);
-    const source = { ...parse<StoredSourceManifestItem>(row.record_json), availability: 'deleted' as const };
-    this.database.prepare('UPDATE source_revisions SET availability = ?, record_json = ? WHERE revision_id = ?')
-      .run(source.availability, JSON.stringify(source), source.revisionId);
-    return source;
+    const rows = this.database.prepare('SELECT record_json FROM source_revisions WHERE source_id = ? ORDER BY revision').all(sourceId) as Array<{ record_json: string }>;
+    if (rows.length === 0) throw new Error(`Unknown source: ${sourceId}`);
+    let latest: StoredSourceManifestItem | null = null;
+    const update = this.database.prepare('UPDATE source_revisions SET availability = ?, record_json = ? WHERE revision_id = ?');
+    for (const row of rows) {
+      const source = { ...parse<StoredSourceManifestItem>(row.record_json), availability: 'deleted' as const };
+      update.run(source.availability, JSON.stringify(source), source.revisionId);
+      latest = source;
+    }
+    return latest!;
   }
 
   recordEvidence(input: Omit<EvidenceRecord, 'evidenceId' | 'createdAt'>) {
