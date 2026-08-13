@@ -40,6 +40,7 @@ type ProcessDependencies = {
   inspect?: (page: RenderedPage, requestOcr: boolean) => Promise<PageVisualResult>;
   visionClient?: VisionClient;
   renderDependencies?: RenderDependencies;
+  completedPages?: Set<number>;
 };
 
 function intakeRoot(source: StoredSourceManifestItem) {
@@ -175,6 +176,10 @@ export async function processDocument(source: StoredSourceManifestItem, deps: Pr
   let inspectedPages = 0;
 
   for (const page of pages) {
+    if (deps.completedPages?.has(page.page)) {
+      inspectedPages += 1;
+      continue;
+    }
     const base = evidenceBase(source, page.page);
     if (page.nativeText.trim()) {
       evidence.push({ ...base, kind: 'native-text', content: page.nativeText, relationships: [], confidence: 1, processingMethod: 'native-extraction' });

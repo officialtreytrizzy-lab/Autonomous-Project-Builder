@@ -157,6 +157,11 @@ export class IntakeStore {
     return row ? parse<ProjectRecord>(row.record_json) : null;
   }
 
+  allProjects() {
+    const rows = this.database.prepare('SELECT record_json FROM projects ORDER BY updated_at DESC').all() as Array<{ record_json: string }>;
+    return rows.map((row) => parse<ProjectRecord>(row.record_json));
+  }
+
   updateProject(projectId: string, patch: Partial<ProjectRecord>) {
     const current = this.getProject(projectId);
     if (!current) throw new Error(`Unknown project: ${projectId}`);
@@ -271,6 +276,11 @@ export class IntakeStore {
 
   evidenceForBriefSource(intakeId: string, sourceId: string) {
     const rows = this.database.prepare('SELECT record_json FROM evidence WHERE intake_id = ? AND source_id = ? ORDER BY page, evidence_id').all(intakeId, sourceId) as Array<{ record_json: string }>;
+    return rows.map((row) => parse<EvidenceRecord>(row.record_json));
+  }
+
+  evidenceForIntake(intakeId: string) {
+    const rows = this.database.prepare('SELECT record_json FROM evidence WHERE intake_id = ? ORDER BY source_id, page, evidence_id').all(intakeId) as Array<{ record_json: string }>;
     return rows.map((row) => parse<EvidenceRecord>(row.record_json));
   }
 

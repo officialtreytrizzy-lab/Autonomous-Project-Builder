@@ -19,6 +19,7 @@
     "desktop:installer": "npm run build && npm run desktop:prepare && npm run desktop:icon && electron-builder --win nsis --config desktop-builder.yml",
     "desktop:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-desktop.ps1",
     "service:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-builder-service.ps1",
+    "intake:worker:build": "node scripts/build-intake-worker.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types tests/*.test.mjs"
@@ -45,6 +46,7 @@
     "@types/react-dom": "latest",
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
+    "esbuild": "0.28.2",
     "eslint": "latest",
     "eslint-config-next": "latest",
     "sharp": "0.35.3",

@@ -14,5 +14,6 @@ Autonomous-Builder-Projects/
 output/playwright/
 *.tsbuildinfo
 dist-desktop/
+dist-worker/
 build/desktop-icon.png
 .worktrees/
