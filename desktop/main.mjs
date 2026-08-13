@@ -158,33 +158,35 @@ async function startDesktop() {
   await connectWindowToBuilder();
 }
 
-const hasLock = app.requestSingleInstanceLock();
-if (!hasLock) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-  });
-
-  app.whenReady().then(async () => {
-    app.setAppUserModelId('com.trizzy.autonomous-project-builder');
-    if (process.argv.includes('--desktop-validate')) {
-      process.stdout.write(`${JSON.stringify(validationReport())}\n`);
-      app.quit();
-      return;
-    }
-    await startDesktop();
-  }).catch(async (error) => {
-    await dialog.showMessageBox({
-      type: 'error',
-      title: 'Autonomous Project Builder',
-      message: error instanceof Error ? error.message : String(error),
-    });
+if (process.argv.includes('--desktop-validate')) {
+  app.whenReady().then(() => {
+    process.stdout.write(`${JSON.stringify(validationReport())}\n`);
     app.quit();
   });
+} else {
+  const hasLock = app.requestSingleInstanceLock();
+  if (!hasLock) {
+    app.quit();
+  } else {
+    app.on('second-instance', () => {
+      if (!mainWindow) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    });
+
+    app.whenReady().then(async () => {
+      app.setAppUserModelId('com.trizzy.autonomous-project-builder');
+      await startDesktop();
+    }).catch(async (error) => {
+      await dialog.showMessageBox({
+        type: 'error',
+        title: 'Autonomous Project Builder',
+        message: error instanceof Error ? error.message : String(error),
+      });
+      app.quit();
+    });
+  }
 }
 
 app.on('before-quit', () => {
@@ -193,4 +195,3 @@ app.on('before-quit', () => {
 });
 
 app.on('window-all-closed', () => app.quit());
-

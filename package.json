@@ -1,6 +1,8 @@
 {
   "name": "autonomous-project-builder",
   "version": "0.1.0",
+  "description": "Private local autonomous software builder for Computer 2.",
+  "author": "Autonomous Project Builder",
   "private": true,
   "main": "desktop/main.mjs",
   "type": "module",
@@ -11,9 +13,10 @@
     "start:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-builder.ps1",
     "desktop:dev": "electron .",
     "desktop:test": "node --test tests/desktop-runtime.test.mjs tests/desktop-contract.test.mjs",
+    "desktop:icon": "node scripts/generate-desktop-icon.mjs",
     "desktop:prepare": "node scripts/prepare-desktop.mjs",
-    "desktop:package": "npm run build && npm run desktop:prepare && electron-builder --dir --config desktop-builder.yml",
-    "desktop:installer": "npm run build && npm run desktop:prepare && electron-builder --win nsis --config desktop-builder.yml",
+    "desktop:package": "npm run build && npm run desktop:prepare && npm run desktop:icon && electron-builder --dir --config desktop-builder.yml",
+    "desktop:installer": "npm run build && npm run desktop:prepare && npm run desktop:icon && electron-builder --win nsis --config desktop-builder.yml",
     "desktop:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-desktop.ps1",
     "service:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-builder-service.ps1",
     "lint": "eslint .",
@@ -38,6 +41,7 @@
     "electron-builder": "^26.15.3",
     "eslint": "latest",
     "eslint-config-next": "latest",
+    "sharp": "0.35.3",
     "typescript": "latest"
   }
 }

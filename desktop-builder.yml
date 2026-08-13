@@ -25,7 +25,8 @@
     }
   ],
   "win": {
-    "target": "nsis"
+    "target": "nsis",
+    "icon": "build/desktop-icon.png"
   },
   "nsis": {
     "oneClick": false,
@@ -38,4 +39,3 @@
     "runAfterFinish": true
   }
 }
-

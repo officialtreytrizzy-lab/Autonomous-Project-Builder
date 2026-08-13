@@ -16,6 +16,7 @@ import {
   prepareDesktopBundle,
   validateDesktopBundle,
 } from '../scripts/prepare-desktop.mjs';
+import { generateDesktopIcon } from '../scripts/generate-desktop-icon.mjs';
 
 test('health polling accepts only the Autonomous Builder architecture', async () => {
   const result = await waitForCompatibleBuilder({
@@ -163,6 +164,22 @@ test('desktop packaging contract creates NSIS desktop and Start Menu shortcuts',
   assert.equal(config.nsis.shortcutName, 'Autonomous Project Builder');
   assert.equal(config.directories.output, 'dist-desktop');
   assert.equal(config.extraResources.some((entry) => entry.to === 'builder'), true);
+});
+
+test('desktop packaging generates a dedicated 512px application icon', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'builder-desktop-icon-'));
+  try {
+    const output = join(root, 'desktop-icon.png');
+    const result = await generateDesktopIcon({
+      source: join(process.cwd(), 'src', 'app', 'icon.svg'),
+      output,
+    });
+
+    assert.deepEqual(result, { width: 512, height: 512, format: 'png' });
+    assert.deepEqual([...readFileSync(output).subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('desktop install helper resolves exactly one generated setup executable', () => {

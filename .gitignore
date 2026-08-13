@@ -14,3 +14,4 @@ Autonomous-Builder-Projects/
 output/playwright/
 *.tsbuildinfo
 dist-desktop/
+build/desktop-icon.png
