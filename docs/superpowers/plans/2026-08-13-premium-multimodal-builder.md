@@ -138,8 +138,8 @@ Expected: FAIL with `ERR_MODULE_NOT_FOUND` for `src/lib/intake/contract.ts`.
 export function computeApprovalHash(input: ApprovalHashInput) {
   const canonical = {
     brief: { version: input.brief.version, content: input.brief.content },
-    sources: input.sources.map(({ sourceId, revision, contentHash, mimeType, availability }) =>
-      ({ sourceId, revision, contentHash, mimeType, availability })).sort((a, b) => a.sourceId.localeCompare(b.sourceId)),
+    sources: input.sources.map(({ sourceId, revision, contentHash, mimeType }) =>
+      ({ sourceId, revision, contentHash, mimeType })).sort((a, b) => a.sourceId.localeCompare(b.sourceId)),
     decisions: input.decisions.map(({ decisionId, resolution }) => ({ decisionId, resolution }))
       .sort((a, b) => a.decisionId.localeCompare(b.decisionId)),
     buildConfiguration: input.buildConfiguration,
