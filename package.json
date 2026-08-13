@@ -13,7 +13,7 @@
     "desktop": "electron .",
     "desktop:dev": "concurrently -k \"next dev -p 3001\" \"wait-on http://127.0.0.1:3001 && electron .\"",
     "desktop:start": "electron .",
-    "dist": "electron-builder --win nsis"
+    "dist": "next build && electron-builder --win nsis"
   },
   "build": {
     "appId": "com.autonomous.projectbuilder",
@@ -21,11 +21,13 @@
     "directories": {
       "output": "dist"
     },
+    "asar": false,
     "files": [
       "electron/**/*",
-      "src/**/*",
+      ".next/**/*",
+      "public/**/*",
       "package.json",
-      "public/**/*"
+      "next.config.ts"
     ],
     "win": {
       "target": [
@@ -37,7 +39,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Autonomous Project Builder"
+      "shortcutName": "Autonomous Project Builder",
+      "runAfterFinish": true
     }
   },
   "dependencies": {
