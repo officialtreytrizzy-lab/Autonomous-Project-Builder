@@ -4,6 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const FORBIDDEN_FILE = /(^\.env(?:\.|$)|\.(?:db|sqlite|sqlite3|log)$|^cookies\.json$)/i;
+const FORBIDDEN_PATH = /(?:^|[\\/])(?:intake[\\/](?:originals|derived|evidence)|\.ollama|models[\\/]blobs)(?:[\\/]|$)/i;
 
 function walk(directory) {
   const files = [];
@@ -22,7 +23,7 @@ export function validateDesktopBundle(standaloneDirectory) {
     throw new Error(`Standalone Builder server is missing: ${serverPath}`);
   }
   for (const file of walk(root)) {
-    if (FORBIDDEN_FILE.test(basename(file))) {
+    if (FORBIDDEN_FILE.test(basename(file)) || FORBIDDEN_PATH.test(file.slice(root.length))) {
       throw new Error(`Forbidden packaged file: ${file}`);
     }
   }

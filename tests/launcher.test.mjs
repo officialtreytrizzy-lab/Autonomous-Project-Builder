@@ -16,5 +16,6 @@ test('local launcher validates the reserved port and supervisor contract without
   assert.equal(payload.port, 3107);
   assert.equal(payload.computer2Url, 'http://127.0.0.1:3000/mcp');
   assert.equal(payload.supervised, true);
+  assert.equal(payload.intakeWorker.endsWith('dist-worker\\intake-worker.mjs'), true);
   assert.equal(result.stdout.includes('MCP_AUTH_TOKEN='), false);
 });

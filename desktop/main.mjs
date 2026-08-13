@@ -63,6 +63,7 @@ function spawnOwnedServer() {
       origin,
       stateDb: paths.stateDb,
       projectsRoot: paths.projectsRoot,
+      intakeWorker: paths.intakeWorker,
       serverEnvironment: environment,
       baseEnvironment: process.env,
     });
@@ -77,6 +78,7 @@ function spawnOwnedServer() {
         BUILDER_PORT: String(port),
         BUILDER_STATE_DB: paths.stateDb,
         BUILDER_PROJECTS_ROOT: paths.projectsRoot,
+        BUILDER_INTAKE_WORKER: paths.intakeWorker,
       },
     };
   }
@@ -152,6 +154,10 @@ async function startDesktop() {
   }
   if (!existsSync(paths.serverPath) && app.isPackaged) {
     await showStartupFailure('The packaged Builder server is missing. Reinstall Autonomous Project Builder.');
+    return;
+  }
+  if (!existsSync(paths.intakeWorker)) {
+    await showStartupFailure('The local document understanding worker is missing. Reinstall Autonomous Project Builder.');
     return;
   }
   spawnOwnedServer();

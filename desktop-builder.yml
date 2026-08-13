@@ -22,6 +22,11 @@
     {
       "from": ".next/standalone",
       "to": "builder"
+    },
+    {
+      "from": "dist-worker",
+      "to": "builder-worker",
+      "filter": ["intake-worker.mjs"]
     }
   ],
   "win": {

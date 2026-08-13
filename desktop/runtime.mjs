@@ -58,6 +58,7 @@ export function resolveDesktopPaths({ isPackaged, resourcesPath, userDataPath, c
   return {
     userDataPath,
     serverPath: isPackaged ? join(resourcesPath, 'builder', 'server.js') : join(cwd, '.next', 'standalone', 'server.js'),
+    intakeWorker: isPackaged ? join(resourcesPath, 'builder-worker', 'intake-worker.mjs') : join(cwd, 'dist-worker', 'intake-worker.mjs'),
     stateDb: join(stateDirectory, 'state.db'),
     projectsRoot: join(homeDirectory, 'Autonomous-Builder-Projects'),
     logDirectory: join(userDataPath, 'logs'),
@@ -117,6 +118,7 @@ export function buildServerLaunch({
   origin,
   stateDb,
   projectsRoot,
+  intakeWorker,
   serverEnvironment = {},
   baseEnvironment = process.env,
 }) {
@@ -134,6 +136,7 @@ export function buildServerLaunch({
       BUILDER_PORT: url.port,
       BUILDER_STATE_DB: stateDb,
       BUILDER_PROJECTS_ROOT: projectsRoot,
+      BUILDER_INTAKE_WORKER: intakeWorker,
       NODE_ENV: 'production',
     },
   };

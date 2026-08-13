@@ -11,6 +11,7 @@ import {
   discoverComputer2Environment,
   ensureDesktopDirectories,
   waitForCompatibleBuilder,
+  resolveDesktopPaths,
 } from '../desktop/runtime.mjs';
 import {
   loadDesktopBuilderConfig,
@@ -61,6 +62,7 @@ test('packaged server launch uses Electron as Node without exposing configuratio
     origin: 'http://127.0.0.1:3107',
     stateDb: 'C:\\Users\\tester\\AppData\\Roaming\\Builder\\state\\state.db',
     projectsRoot: 'C:\\Users\\tester\\Autonomous-Builder-Projects',
+    intakeWorker: 'C:\\Program Files\\Builder\\resources\\builder-worker\\intake-worker.mjs',
     serverEnvironment: { MCP_AUTH_TOKEN: 'server-secret' },
     baseEnvironment: { PATH: 'C:\\Windows\\System32' },
   });
@@ -71,6 +73,8 @@ test('packaged server launch uses Electron as Node without exposing configuratio
   assert.equal(launch.env.PORT, '3107');
   assert.equal(launch.env.BUILDER_STATE_DB.endsWith('state.db'), true);
   assert.equal(launch.env.MCP_AUTH_TOKEN, 'server-secret');
+  assert.equal(launch.env.BUILDER_INTAKE_WORKER.endsWith('intake-worker.mjs'), true);
+  assert.equal(launch.args.join(' ').includes('intake-worker'), false);
   assert.equal(launch.args.join(' ').includes('server-secret'), false);
 });
 
@@ -165,6 +169,21 @@ test('desktop packaging contract creates NSIS desktop and Start Menu shortcuts',
   assert.equal(config.nsis.shortcutName, 'Autonomous Project Builder');
   assert.equal(config.directories.output, 'dist-desktop');
   assert.equal(config.extraResources.some((entry) => entry.to === 'builder'), true);
+  assert.equal(config.extraResources.some((entry) => entry.to === 'builder-worker'), true);
+  assert.equal(config.files.some((entry) => String(entry).includes('intake/originals')), false);
+  assert.equal(config.files.some((entry) => String(entry).includes('.ollama')), false);
+});
+
+test('desktop paths resolve the packaged intake worker outside writable project state', () => {
+  const paths = resolveDesktopPaths({
+    isPackaged: true,
+    resourcesPath: 'C:\\Program Files\\Builder\\resources',
+    userDataPath: 'C:\\Users\\tester\\AppData\\Roaming\\Builder',
+    cwd: 'C:\\source',
+    homeDirectory: 'C:\\Users\\tester',
+  });
+  assert.equal(paths.intakeWorker, 'C:\\Program Files\\Builder\\resources\\builder-worker\\intake-worker.mjs');
+  assert.equal(paths.intakeWorker.startsWith(paths.projectsRoot), false);
 });
 
 test('TypeScript excludes generated desktop release output from repeat builds', () => {

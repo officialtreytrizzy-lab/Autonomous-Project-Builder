@@ -14,7 +14,7 @@
     "desktop:dev": "electron .",
     "desktop:test": "node --test tests/desktop-runtime.test.mjs tests/desktop-contract.test.mjs",
     "desktop:icon": "node scripts/generate-desktop-icon.mjs",
-    "desktop:prepare": "node scripts/prepare-desktop.mjs",
+    "desktop:prepare": "npm run intake:worker:build && node scripts/prepare-desktop.mjs",
     "desktop:package": "npm run build && npm run desktop:prepare && npm run desktop:icon && electron-builder --dir --config desktop-builder.yml",
     "desktop:installer": "npm run build && npm run desktop:prepare && npm run desktop:icon && electron-builder --win nsis --config desktop-builder.yml",
     "desktop:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-desktop.ps1",

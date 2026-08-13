@@ -8,11 +8,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $computer2McpUrl = if ($env:COMPUTER2_MCP_URL) { $env:COMPUTER2_MCP_URL } elseif ($env:MCP_MAIN_NODE_URL) { $env:MCP_MAIN_NODE_URL } else { 'http://127.0.0.1:3000/mcp' }
+$intakeWorker = Join-Path $projectRoot 'dist-worker\intake-worker.mjs'
 if ($env:BUILDER_PORT -and [int]::TryParse($env:BUILDER_PORT, [ref]$Port)) { }
 if ($Port -eq 3000) { throw 'Port 3000 is reserved for Computer 2 MCP. Choose a dedicated Builder port.' }
 
 if ($ValidateOnly) {
-  [pscustomobject]@{ port = $Port; computer2Url = $computer2McpUrl; supervised = $true; projectRoot = $projectRoot } | ConvertTo-Json -Compress
+  [pscustomobject]@{ port = $Port; computer2Url = $computer2McpUrl; supervised = $true; projectRoot = $projectRoot; intakeWorker = $intakeWorker } | ConvertTo-Json -Compress
   exit 0
 }
 
@@ -69,7 +70,9 @@ if (-not $env:BUILDER_SERVICE_TOKEN) { throw 'Computer 2 MCP authentication is u
 $env:BUILDER_PORT = "$Port"
 
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules'))) { & npm.cmd ci --prefix $projectRoot; if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' } }
+if (-not (Test-Path -LiteralPath $intakeWorker)) { & npm.cmd run intake:worker:build --prefix $projectRoot; if ($LASTEXITCODE -ne 0) { throw 'Intake worker build failed' } }
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot '.next\BUILD_ID'))) { & npm.cmd run build --prefix $projectRoot; if ($LASTEXITCODE -ne 0) { throw 'Production build failed' } }
+$env:BUILDER_INTAKE_WORKER = $intakeWorker
 
 $runtimeDirectory = Join-Path $projectRoot '.builder\runtime'
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
