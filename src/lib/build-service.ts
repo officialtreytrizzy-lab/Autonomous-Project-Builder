@@ -3,8 +3,11 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { analyzeBuild, APPROVAL_CONTINUATION_POLICY, type BuildRequest } from './builder.ts';
 import { BuildStore, defaultProjectsRoot, getBuildStore, type BuildRecord, type BuildStatus } from './build-store.ts';
-import { classifyBuildError, prepareBuildWorkspace, validateCompletionEvidence, type CompletionEvidence } from './build-execution.ts';
+import { classifyBuildError, prepareBuildWorkspace, validateCompletionEvidence, writeApprovedBrief, type CompletionEvidence } from './build-execution.ts';
 import { callComputer2 as defaultComputer2Caller } from './computer2-mcp.ts';
+import { computeApprovalHash } from './intake/contract.ts';
+import { getIntakeStore, IntakeStore } from './intake/store.ts';
+import type { ApprovalBuildConfiguration, BriefDecision, BuildBrief, SourceManifestItem } from './intake/types.ts';
 
 type Computer2Caller = (tool: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -37,17 +40,66 @@ export class BuildService {
   private caller: Computer2Caller;
   private projectsRoot: string;
   private allocatePort: () => Promise<number>;
+  private intakeStore?: IntakeStore;
 
-  constructor(options: { store: BuildStore; callComputer2: Computer2Caller; projectsRoot: string; allocatePort?: () => Promise<number> }) {
+  constructor(options: { store: BuildStore; intakeStore?: IntakeStore; callComputer2: Computer2Caller; projectsRoot: string; allocatePort?: () => Promise<number> }) {
     this.store = options.store;
     this.caller = options.callComputer2;
     this.projectsRoot = options.projectsRoot;
     this.allocatePort = options.allocatePort || allocateProjectPort;
+    this.intakeStore = options.intakeStore;
   }
 
-  async start(request: BuildRequest): Promise<BuildRecord> {
+  async startApproved(input: { intakeId: string; approvalHash: string }) {
+    if (!input.approvalHash.trim()) throw new Error('Approval required before a build can start');
+    if (!this.intakeStore) throw new Error('Approval store is not configured');
+    const intake = this.intakeStore.getIntake(input.intakeId);
+    if (!intake) throw new Error(`Unknown intake: ${input.intakeId}`);
+    const project = this.intakeStore.getProject(intake.projectId);
+    if (!project) throw new Error(`Unknown project: ${intake.projectId}`);
+    const approval = this.intakeStore.currentApproval(input.intakeId);
+    if (!approval) throw new Error('Approval required before a build can start');
+    if (approval.hash !== input.approvalHash) throw new Error('Approval no longer matches the current build contract');
+    const brief = this.intakeStore.currentBrief(input.intakeId);
+    if (!brief || brief.id !== approval.briefVersionId) throw new Error('Approval no longer matches the current Build Brief');
+    if (!brief.visualCoverage.complete) throw new Error('Visual inspection is incomplete; approval cannot start execution');
+    const sources = this.intakeStore.currentSources(input.intakeId);
+    const decisions = this.intakeStore.decisionsForBrief(brief.id);
+    if (decisions.some((decision) => decision.required && !decision.resolution.trim())) throw new Error('Approval requires all user-only decisions to be resolved');
+    const recomputed = computeApprovalHash({ brief, sources, decisions, buildConfiguration: approval.buildConfiguration });
+    if (recomputed !== approval.hash || recomputed !== input.approvalHash) throw new Error('Approval no longer matches the current build contract');
+    const request: BuildRequest = {
+      name: project.name,
+      objective: brief.content.outcome,
+      repository: approval.buildConfiguration.repository,
+      backend: approval.buildConfiguration.backend,
+      deployment: approval.buildConfiguration.deployment,
+      workflow: approval.buildConfiguration.workflow,
+      needsAuthenticatedBrowser: approval.buildConfiguration.needsAuthenticatedBrowser,
+      needsWindowsHost: approval.buildConfiguration.needsWindowsHost,
+    };
+    return this.start(request, { projectId: project.id, intakeId: intake.id, brief, sources, decisions, config: approval.buildConfiguration, approvalHash: approval.hash });
+  }
+
+  async start(request: BuildRequest, approved?: {
+    projectId: string;
+    intakeId: string;
+    brief: BuildBrief;
+    sources: SourceManifestItem[];
+    decisions: BriefDecision[];
+    config: ApprovalBuildConfiguration;
+    approvalHash: string;
+  }): Promise<BuildRecord> {
     const analysis = analyzeBuild(request);
-    const initial = this.store.create({ request, analysis, workspace: this.projectsRoot });
+    const initial = this.store.create({
+      request, analysis, workspace: this.projectsRoot,
+      ...(approved ? {
+        projectId: approved.projectId,
+        intakeId: approved.intakeId,
+        briefVersionId: approved.brief.id,
+        approvalHash: approved.approvalHash,
+      } : {}),
+    });
     if (!analysis.canContinue) {
       const blocked = this.store.update(initial.id, { status: 'blocked', currentStage: 'blocked', currentStep: 'Waiting for required user input', finishedAt: new Date().toISOString() });
       this.store.appendLog(blocked.id, { step: 'analysis', target: 'user', errorClass: 'user-required input', message: 'Build contains a genuinely blocking RED ingredient.' });
@@ -57,6 +109,14 @@ export class BuildService {
     try {
       const port = await this.allocatePort();
       const prepared = prepareBuildWorkspace({ root: this.projectsRoot, buildId: initial.id, port, request, steps: analysis.steps });
+      if (approved) writeApprovedBrief({
+        workspace: prepared.workspace,
+        brief: approved.brief,
+        sources: approved.sources,
+        decisions: approved.decisions,
+        buildConfiguration: approved.config,
+        approvalHash: approved.approvalHash,
+      });
       let build = this.store.update(initial.id, { workspace: prepared.workspace, currentStep: 'Registering execution plan' });
       this.store.appendLog(build.id, { step: 'workspace', target: 'computer-2', tool: 'local-filesystem', result: { workspace: prepared.workspace, port } });
 
@@ -307,7 +367,7 @@ const globalService = globalThis as typeof globalThis & { __autonomousBuildServi
 
 export function getBuildService() {
   if (!globalService.__autonomousBuildService) {
-    globalService.__autonomousBuildService = new BuildService({ store: getBuildStore(), callComputer2: defaultComputer2Caller, projectsRoot: defaultProjectsRoot() });
+    globalService.__autonomousBuildService = new BuildService({ store: getBuildStore(), intakeStore: getIntakeStore(), callComputer2: defaultComputer2Caller, projectsRoot: defaultProjectsRoot() });
   }
   return globalService.__autonomousBuildService;
 }

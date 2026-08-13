@@ -38,6 +38,9 @@ export type BuildRecord = {
   verification: VerificationCheck[];
   result: unknown;
   appUrl: string;
+  intakeId?: string;
+  briefVersionId?: string;
+  approvalHash?: string;
 };
 
 export type BuildLogEvent = {
@@ -126,12 +129,20 @@ export class BuildStore {
     this.closed = true;
   }
 
-  create(input: { request: BuildRequest; analysis: BuildAnalysis | Record<string, unknown>; workspace: string }): BuildRecord {
+  create(input: {
+    request: BuildRequest;
+    analysis: BuildAnalysis | Record<string, unknown>;
+    workspace: string;
+    projectId?: string;
+    intakeId?: string;
+    briefVersionId?: string;
+    approvalHash?: string;
+  }): BuildRecord {
     const now = new Date().toISOString();
     const id = `build-${randomUUID()}`;
     const record: BuildRecord = {
       id,
-      projectId: `project-${randomUUID()}`,
+      projectId: input.projectId || `project-${randomUUID()}`,
       planId: '',
       jobId: '',
       requestedGoal: input.request.objective || '',
@@ -154,6 +165,9 @@ export class BuildStore {
       verification: [],
       result: null,
       appUrl: '',
+      ...(input.intakeId ? { intakeId: input.intakeId } : {}),
+      ...(input.briefVersionId ? { briefVersionId: input.briefVersionId } : {}),
+      ...(input.approvalHash ? { approvalHash: input.approvalHash } : {}),
     };
     this.write(record);
     return record;

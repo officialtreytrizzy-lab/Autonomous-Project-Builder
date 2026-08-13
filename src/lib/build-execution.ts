@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { BuildRequest, ExecutionStep } from './builder';
 import type { VerificationCheck } from './build-store';
+import type { ApprovalBuildConfiguration, BriefDecision, BuildBrief, SourceManifestItem } from './intake/types';
 
 export type ErrorClass =
   | 'transient/network'
@@ -86,6 +87,7 @@ PROJECT NAME
 ${input.request.name || 'Local project'}
 
 EXECUTION CONTRACT
+- If .builder/approved-brief.md exists, read it first. It is the immutable, user-approved execution contract and is authoritative for scope and acceptance criteria.
 - This build direction is already approved. Start implementation immediately; do not pause for brainstorming, design review, plan approval, or routine confirmation.
 - Do not create subagents or wait for another conversation. You are the implementation worker and must finish the build in this invocation.
 - Work only inside the current workspace.
@@ -115,6 +117,60 @@ Use this shape:
 }
 Include all ten named verification gates exactly once. A skipped gate must explain why it is not applicable. Never include secrets in this file or command output.
 `;
+}
+
+function list(title: string, values: string[]) {
+  return `## ${title}\n\n${values.length ? values.map((value) => `- ${value}`).join('\n') : '- None'}\n`;
+}
+
+export function writeApprovedBrief(input: {
+  workspace: string;
+  brief: BuildBrief;
+  sources: SourceManifestItem[];
+  decisions: BriefDecision[];
+  buildConfiguration: ApprovalBuildConfiguration;
+  approvalHash: string;
+}) {
+  const content = [
+    '# Approved Build Brief',
+    '',
+    `Brief version: ${input.brief.version}`,
+    `Approval contract: ${input.approvalHash}`,
+    '',
+    '## Outcome',
+    '',
+    input.brief.content.outcome,
+    '',
+    list('Users', input.brief.content.users),
+    list('Critical flows', input.brief.content.flows),
+    list('Requirements', input.brief.content.requirements),
+    list('Design direction', input.brief.content.designDirection),
+    list('Data and integrations', input.brief.content.dataAndIntegrations),
+    list('Exclusions', input.brief.content.exclusions),
+    list('Acceptance tests', input.brief.content.acceptanceTests),
+    list('Approved assumptions', input.brief.content.assumptions),
+    '## Resolved decisions',
+    '',
+    ...(input.decisions.length ? input.decisions.map((decision) => `- ${decision.question}: ${decision.resolution}`) : ['- None']),
+    '',
+    '## Source manifest',
+    '',
+    ...input.sources.map((source) => `- ${source.originalFilename} · revision ${source.revision} · ${source.mimeType} · sha256 ${source.contentHash}`),
+    '',
+    '## Build configuration',
+    '',
+    `- Deployment: ${input.buildConfiguration.deployment}`,
+    `- Repository: ${input.buildConfiguration.repository || 'none (private local workspace)'}`,
+    `- Backend: ${input.buildConfiguration.backend}`,
+    `- Workflow: ${input.buildConfiguration.workflow}`,
+    `- Authenticated browser required: ${input.buildConfiguration.needsAuthenticatedBrowser ? 'yes' : 'no'}`,
+    `- Windows host required: ${input.buildConfiguration.needsWindowsHost ? 'yes' : 'no'}`,
+    '',
+    `Visual coverage: ${input.brief.visualCoverage.inspectedPages}/${input.brief.visualCoverage.totalPages} pages inspected.`,
+  ].join('\n');
+  const path = join(input.workspace, '.builder', 'approved-brief.md');
+  writeFileSync(path, content, { encoding: 'utf8', flag: 'wx' });
+  return path;
 }
 
 export function prepareBuildWorkspace(input: { root: string; buildId: string; port: number; request: BuildRequest; steps: ExecutionStep[] }) {
