@@ -1,23 +1,40 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { analyzeBuild, APPROVAL_CONTINUATION_POLICY } from '@/lib/builder';
 import { callComputer2 } from '@/lib/computer2-mcp';
+import { persistBuild } from '@/lib/supabase-store';
 
 const schema = z.object({
   name: z.string().trim().max(120).optional(),
   objective: z.string().trim().min(1).max(4000),
-  repository: z.string().trim().min(1).max(300),
+  repository: z.string().trim().max(300).optional(),
   backend: z.enum(['supabase', 'appwrite', 'firebase', 'none']).default('none'),
-  deployment: z.enum(['vercel', 'none']).default('none'),
+  deployment: z.enum(['local', 'vercel', 'none']).default('local'),
   workflow: z.enum(['windmill', 'none']).default('none'),
   needsAuthenticatedBrowser: z.boolean().default(false),
   needsWindowsHost: z.boolean().default(false),
 });
 
 function pickId(value: unknown, names: string[]) {
-  if (!value || typeof value !== 'object') return '';
-  const record = value as Record<string, unknown>;
-  for (const name of names) if (typeof record[name] === 'string' && record[name]) return String(record[name]);
+  if (!value) return '';
+  if (typeof value === 'string') {
+    for (const name of names) {
+      const match = value.match(new RegExp(`"${name}"\\s*:\\s*"([^"]+)"`));
+      if (match) return match[1];
+    }
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const name of names) {
+      if (typeof record[name] === 'string' && record[name]) return String(record[name]);
+    }
+    if (typeof record.text === 'string') {
+      for (const name of names) {
+        const match = record.text.match(new RegExp(`"${name}"\\s*:\\s*"([^"]+)"`));
+        if (match) return match[1];
+      }
+    }
+  }
   return '';
 }
 
@@ -50,7 +67,28 @@ export async function POST(request: NextRequest) {
     const jobId = pickId(job, ['job_id', 'jobId', 'id']);
     if (!jobId) throw new Error('Computer 2 did not return a job id');
 
-    return NextResponse.json({ ok: true, plan_id: planId, job_id: jobId, stage: 'running', analysis });
+    const buildId = crypto.randomUUID();
+    await persistBuild({
+      id: buildId,
+      request: buildRequest,
+      analysis,
+      planId,
+      jobId,
+      status: 'running',
+      logs: [
+        { time: new Date().toISOString(), message: `Plan created: ${planId}` },
+        { time: new Date().toISOString(), message: `Job submitted: ${jobId}` },
+      ],
+    }).catch(() => {});
+
+    return NextResponse.json({
+      ok: true,
+      build_id: buildId,
+      plan_id: planId,
+      job_id: jobId,
+      stage: 'running',
+      analysis,
+    });
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ error: 'Invalid build request', issues: error.issues }, { status: 400 });
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to start build' }, { status: 502 });

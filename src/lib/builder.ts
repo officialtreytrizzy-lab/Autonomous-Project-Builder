@@ -18,7 +18,7 @@ export type BuildRequest = {
   objective?: string;
   repository?: string;
   backend?: 'supabase' | 'appwrite' | 'firebase' | 'none';
-  deployment?: 'vercel' | 'none';
+  deployment?: 'local' | 'vercel' | 'none';
   workflow?: 'windmill' | 'none';
   needsAuthenticatedBrowser?: boolean;
   needsWindowsHost?: boolean;
@@ -56,7 +56,7 @@ export function analyzeIngredients(input: BuildRequest): Ingredient[] {
 
   ingredients.push(input.repository
     ? ingredient({ id: 'repository', label: 'Repository', level: 'green', required: true, available: true, target: 'docker-mcp', detail: input.repository })
-    : ingredient({ id: 'repository', label: 'Repository', level: 'red', required: true, available: false, target: 'user', detail: 'A repository is required before implementation can be persisted.', blocking: true }));
+    : ingredient({ id: 'repository', label: 'Repository', level: 'green', required: false, available: true, target: 'computer-2', detail: 'No remote repository selected. The project will remain in the private local workspace on Computer 2.' }));
 
   if (input.backend && input.backend !== 'none') {
     ingredients.push(ingredient({

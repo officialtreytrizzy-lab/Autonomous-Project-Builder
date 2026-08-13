@@ -40,6 +40,9 @@ export async function GET() {
   return NextResponse.json(
     {
       status: ready ? 'ready' : 'degraded',
+      computer2: computer2.ok,
+      dockerGateway: dockerGateway.ok,
+      windmill: windmill.ok,
       architecture: 'hybrid-docker-mcp',
       services: { computer2, dockerGateway, windmill },
       timestamp: new Date().toISOString(),
