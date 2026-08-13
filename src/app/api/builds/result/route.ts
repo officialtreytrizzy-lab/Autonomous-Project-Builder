@@ -1,9 +1,14 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
-import { callComputer2 } from '@/lib/computer2-mcp';
+import { NextRequest, NextResponse } from 'next/server';
+import { getBuildService } from '@/lib/build-service';
+import { getBuildStore } from '@/lib/build-store';
 
 export async function GET(request: NextRequest) {
-  const jobId = request.nextUrl.searchParams.get('job_id')?.trim();
-  if (!jobId) return NextResponse.json({ error: 'job_id is required' }, { status: 400 });
-  try { return NextResponse.json(await callComputer2('job_result', { job_id: jobId, full: request.nextUrl.searchParams.get('full') === '1' })); }
-  catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : 'Result check failed' }, { status: 502 }); }
+  const buildId = request.nextUrl.searchParams.get('build_id')?.trim();
+  if (!buildId) return NextResponse.json({ error: 'build_id is required' }, { status: 400 });
+  try {
+    const build = await getBuildService().refresh(buildId);
+    return NextResponse.json({ build, logs: getBuildStore().logs(buildId) });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Result check failed' }, { status: 502 });
+  }
 }
