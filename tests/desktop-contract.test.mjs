@@ -164,3 +164,43 @@ test('desktop packaging contract creates NSIS desktop and Start Menu shortcuts',
   assert.equal(config.directories.output, 'dist-desktop');
   assert.equal(config.extraResources.some((entry) => entry.to === 'builder'), true);
 });
+
+test('desktop install helper resolves exactly one generated setup executable', () => {
+  const output = mkdtempSync(join(tmpdir(), 'builder-desktop-installer-'));
+  try {
+    const setup = join(output, 'Autonomous-Project-Builder-Setup-0.1.0.exe');
+    writeFileSync(setup, 'installer-fixture');
+    const result = spawnSync('powershell', [
+      '-NoProfile',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', join(process.cwd(), 'scripts', 'install-desktop.ps1'),
+      '-OutputDirectory', output,
+      '-ValidateOnly',
+    ], { cwd: process.cwd(), encoding: 'utf8', timeout: 30_000 });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(result.stdout.trim().toLowerCase(), setup.toLowerCase());
+  } finally {
+    rmSync(output, { recursive: true, force: true });
+  }
+});
+
+test('desktop install helper rejects ambiguous setup artifacts', () => {
+  const output = mkdtempSync(join(tmpdir(), 'builder-desktop-installer-'));
+  try {
+    writeFileSync(join(output, 'Autonomous-Project-Builder-Setup-0.1.0.exe'), 'one');
+    writeFileSync(join(output, 'Autonomous-Project-Builder-Setup-0.2.0.exe'), 'two');
+    const result = spawnSync('powershell', [
+      '-NoProfile',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', join(process.cwd(), 'scripts', 'install-desktop.ps1'),
+      '-OutputDirectory', output,
+      '-ValidateOnly',
+    ], { cwd: process.cwd(), encoding: 'utf8', timeout: 30_000 });
+
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stderr}\n${result.stdout}`, /exactly one/i);
+  } finally {
+    rmSync(output, { recursive: true, force: true });
+  }
+});
