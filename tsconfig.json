@@ -7,6 +7,7 @@
       "esnext"
     ],
     "allowJs": false,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
@@ -36,6 +37,7 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "dist-desktop"
   ]
 }

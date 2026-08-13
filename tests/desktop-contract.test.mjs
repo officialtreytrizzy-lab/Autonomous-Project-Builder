@@ -166,6 +166,11 @@ test('desktop packaging contract creates NSIS desktop and Start Menu shortcuts',
   assert.equal(config.extraResources.some((entry) => entry.to === 'builder'), true);
 });
 
+test('TypeScript excludes generated desktop release output from repeat builds', () => {
+  const config = JSON.parse(readFileSync(join(process.cwd(), 'tsconfig.json'), 'utf8'));
+  assert.equal(config.exclude.includes('dist-desktop'), true);
+});
+
 test('desktop packaging generates a dedicated 512px application icon', async () => {
   const root = mkdtempSync(join(tmpdir(), 'builder-desktop-icon-'));
   try {
