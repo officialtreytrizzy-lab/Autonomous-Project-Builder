@@ -81,7 +81,7 @@ export async function discoverDocumentCapabilities(deps: DiscoveryDependencies =
   const configuredRenderer = process.env.PDF_RENDERER_PATH?.trim() || '';
   const [ollamaPath, rendererPath, hasWord] = await Promise.all([
     findCommand('ollama'),
-    configuredRenderer && existsSync(configuredRenderer) ? Promise.resolve(configuredRenderer) : findCommand('pdftoppm'),
+    configuredRenderer && existsSync(/* turbopackIgnore: true */ configuredRenderer) ? Promise.resolve(configuredRenderer) : findCommand('pdftoppm'),
     checkWord(),
   ]);
 

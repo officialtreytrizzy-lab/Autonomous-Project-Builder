@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { createEventResponse } from '../src/app/api/events/route.ts';
-import { projectSpine, readWorkerEventBatch } from '../src/lib/intake/events.ts';
+import { projectSpine } from '../src/lib/intake/events.ts';
+import { readWorkerEventBatch } from '../src/lib/intake/worker-events.ts';
 import { IntakeStore } from '../src/lib/intake/store.ts';
 
 function fixture() {

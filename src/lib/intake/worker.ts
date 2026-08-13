@@ -85,6 +85,7 @@ export async function runIntakeWorker(deps: WorkerDependencies) {
           .filter((page): page is number => typeof page === 'number'),
       );
       deps.store.updateIntake(intake.id, { status: 'inspecting' });
+      deps.store.updateSourceRevision(source.revisionId, { processingStatus: 'processing' });
       const result = await (deps.processSource || defaultSourceProcessor)(source, {
         completedPages,
         async checkpointPage(page, pageEvidence) {
@@ -98,6 +99,11 @@ export async function runIntakeWorker(deps: WorkerDependencies) {
       });
       totalPages += result.totalPages;
       inspectedPages += result.inspectedPages;
+      deps.store.updateSourceRevision(source.revisionId, {
+        processingStatus: result.totalPages === result.inspectedPages ? 'complete' : 'blocked',
+        pageCount: result.totalPages,
+        inspectedPageCount: result.inspectedPages,
+      });
     }
 
     deps.store.updateIntake(intake.id, { status: 'synthesizing' });

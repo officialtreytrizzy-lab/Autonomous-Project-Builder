@@ -8,7 +8,7 @@ import { callComputer2 as defaultComputer2Caller } from './computer2-mcp.ts';
 import { computeApprovalHash } from './intake/contract.ts';
 import { getIntakeStore, IntakeStore } from './intake/store.ts';
 import type { ApprovalBuildConfiguration, BriefDecision, BuildBrief, SourceManifestItem } from './intake/types.ts';
-import { readWorkerEventBatch } from './intake/events.ts';
+import { readWorkerEventBatch } from './intake/worker-events.ts';
 
 type Computer2Caller = (tool: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -77,6 +77,11 @@ export class BuildService {
       : this.store.update(build.id, { workerEventOffset: batch.nextOffset });
   }
 
+  private updateProjectState(build: BuildRecord, state: 'building' | 'blocked' | 'failed' | 'cancelled' | 'complete') {
+    if (!this.intakeStore?.getProject(build.projectId)) return;
+    this.intakeStore.updateProject(build.projectId, { state, activeBuildId: build.id });
+  }
+
   async startApproved(input: { intakeId: string; approvalHash: string }) {
     if (!input.approvalHash.trim()) throw new Error('Approval required before a build can start');
     if (!this.intakeStore) throw new Error('Approval store is not configured');
@@ -105,7 +110,9 @@ export class BuildService {
       needsAuthenticatedBrowser: approval.buildConfiguration.needsAuthenticatedBrowser,
       needsWindowsHost: approval.buildConfiguration.needsWindowsHost,
     };
-    return this.start(request, { projectId: project.id, intakeId: intake.id, brief, sources, decisions, config: approval.buildConfiguration, approvalHash: approval.hash });
+    const build = await this.start(request, { projectId: project.id, intakeId: intake.id, brief, sources, decisions, config: approval.buildConfiguration, approvalHash: approval.hash });
+    this.updateProjectState(build, build.status === 'blocked' ? 'blocked' : 'building');
+    return build;
   }
 
   async start(request: BuildRequest, approved?: {
@@ -313,6 +320,7 @@ export class BuildService {
     });
     this.store.appendLog(completed.id, { step: 'completion-gate', target: 'computer-2', tool: 'job_result', attempt, result: { status: 'complete', appUrl: completed.appUrl, verification: completed.verification } });
     this.emit(completed, { category: 'verification-complete', stage: 'complete', severity: 'success', humanMessage: 'Production verification passed and the local application is running.', technicalPayload: { appUrl: completed.appUrl, verification: completed.verification } });
+    this.updateProjectState(completed, 'complete');
     return completed;
   }
 
@@ -324,6 +332,7 @@ export class BuildService {
     });
     this.store.appendLog(failed.id, { step: 'completion-gate', target: 'computer-2', errorClass, result: 'failed', message });
     this.emit(failed, { category: 'blocked', stage: 'verification', severity: 'error', humanMessage: 'The production completion gate failed.', technicalPayload: { errorClass, message } });
+    this.updateProjectState(failed, 'failed');
     return failed;
   }
 
@@ -368,6 +377,7 @@ export class BuildService {
     const errorClass = classifyBuildError(message);
     const failed = this.store.update(build.id, { errors: [...build.errors, { timestamp: new Date().toISOString(), errorClass, message }], result });
     this.store.appendLog(failed.id, { step: 'job-result', target: 'computer-2', tool: 'job_result', errorClass, attempt: build.retryCount + 1, result: 'failed', message });
+    this.updateProjectState(failed, 'failed');
     return failed;
   }
 
@@ -379,6 +389,7 @@ export class BuildService {
     const cancelled = this.store.update(build.id, { status: 'cancelled', currentStage: 'cancelled', currentStep: 'Cancelled by user', finishedAt: new Date().toISOString() });
     this.store.appendLog(cancelled.id, { step: 'cancel', target: 'computer-2', tool: 'job_cancel', result: 'cancelled' });
     this.emit(cancelled, { category: 'cancelled', stage: 'cancelled', severity: 'warning', humanMessage: 'Build cancelled by the user.' });
+    this.updateProjectState(cancelled, 'cancelled');
     return cancelled;
   }
 
@@ -406,6 +417,7 @@ export class BuildService {
       finishedAt: null,
     });
     this.store.appendLog(rerun.id, { step: 'verification-rerun', target: 'computer-2', tool: 'job_submit', result: { jobId, status: 'queued' } });
+    this.updateProjectState(rerun, 'building');
     return rerun;
   }
 

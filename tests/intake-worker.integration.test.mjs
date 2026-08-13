@@ -54,6 +54,8 @@ test('worker checkpoints each page and resumes without reprocessing completed pa
   assert.equal(completed.visualCoverage.complete, true);
   assert.equal(store.currentBrief(intake.id)?.content.outcome, 'Build it');
   assert.equal(store.getIntake(intake.id)?.status, 'awaiting-approval');
+  assert.equal(store.currentSources(intake.id)[0].processingStatus, 'complete');
+  assert.equal(store.currentSources(intake.id)[0].inspectedPageCount, 3);
 });
 
 test('worker leaves unresolved contradictions as required pre-build decisions', async (t) => {

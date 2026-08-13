@@ -9,7 +9,7 @@ export async function GET() {
       status: readiness.status,
       architecture: 'hybrid-docker-mcp',
       core: ['computer2', 'localRuntime'],
-      optional: ['dockerGateway', 'windmill', 'authenticatedChrome'],
+      optional: ['dockerGateway', 'windmill', 'authenticatedChrome', 'documentVision'],
       services,
       degradedCapabilities: readiness.degradedCapabilities,
       unavailableCore: readiness.unavailableCore,

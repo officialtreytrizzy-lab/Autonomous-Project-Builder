@@ -247,6 +247,16 @@ export class IntakeStore {
     return rows.map((row) => parse<StoredSourceManifestItem>(row.record_json));
   }
 
+  updateSourceRevision(revisionId: string, patch: Partial<StoredSourceManifestItem>) {
+    const row = this.database.prepare('SELECT record_json FROM source_revisions WHERE revision_id = ?').get(revisionId) as { record_json: string } | undefined;
+    if (!row) throw new Error(`Unknown source revision: ${revisionId}`);
+    const current = parse<StoredSourceManifestItem>(row.record_json);
+    const updated = { ...current, ...patch, revisionId: current.revisionId, sourceId: current.sourceId, intakeId: current.intakeId, localPath: current.localPath };
+    this.database.prepare('UPDATE source_revisions SET availability = ?, local_path = ?, record_json = ? WHERE revision_id = ?')
+      .run(updated.availability, updated.localPath, JSON.stringify(updated), revisionId);
+    return updated;
+  }
+
   currentSources(intakeId: string) {
     const rows = this.database.prepare(`SELECT s.record_json FROM source_revisions s
       INNER JOIN (SELECT source_id, MAX(revision) AS revision FROM source_revisions WHERE intake_id = ? GROUP BY source_id) latest
