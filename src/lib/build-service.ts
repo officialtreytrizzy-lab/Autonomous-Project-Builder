@@ -8,6 +8,7 @@ import { callComputer2 as defaultComputer2Caller } from './computer2-mcp.ts';
 import { computeApprovalHash } from './intake/contract.ts';
 import { getIntakeStore, IntakeStore } from './intake/store.ts';
 import type { ApprovalBuildConfiguration, BriefDecision, BuildBrief, SourceManifestItem } from './intake/types.ts';
+import { readWorkerEventBatch } from './intake/events.ts';
 
 type Computer2Caller = (tool: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -48,6 +49,32 @@ export class BuildService {
     this.projectsRoot = options.projectsRoot;
     this.allocatePort = options.allocatePort || allocateProjectPort;
     this.intakeStore = options.intakeStore;
+  }
+
+  private emit(build: BuildRecord, input: {
+    category: string;
+    stage: string;
+    severity: 'info' | 'success' | 'warning' | 'error';
+    humanMessage: string;
+    technicalPayload?: unknown;
+  }) {
+    if (!this.intakeStore?.getProject(build.projectId)) return;
+    this.intakeStore.appendEvent(build.projectId, {
+      ...input,
+      buildId: build.id,
+      jobId: build.jobId,
+      source: 'build-service',
+      target: 'computer-2',
+    });
+  }
+
+  private ingestWorkerEvents(build: BuildRecord) {
+    if (!build.workspace || !this.intakeStore?.getProject(build.projectId)) return build;
+    const batch = readWorkerEventBatch(join(build.workspace, '.builder', 'worker.events.jsonl'), build.workerEventOffset || 0);
+    for (const event of batch.events) this.emit(build, event);
+    return batch.nextOffset === (build.workerEventOffset || 0)
+      ? build
+      : this.store.update(build.id, { workerEventOffset: batch.nextOffset });
   }
 
   async startApproved(input: { intakeId: string; approvalHash: string }) {
@@ -119,6 +146,7 @@ export class BuildService {
       });
       let build = this.store.update(initial.id, { workspace: prepared.workspace, currentStep: 'Registering execution plan' });
       this.store.appendLog(build.id, { step: 'workspace', target: 'computer-2', tool: 'local-filesystem', result: { workspace: prepared.workspace, port } });
+      this.emit(build, { category: 'stage', stage: 'planning', severity: 'info', humanMessage: 'Prepared the private local project workspace.' });
 
       const goal = [
         `Project: ${request.name || 'Private local project'}`,
@@ -137,6 +165,7 @@ export class BuildService {
       if (!planId) throw new Error('Computer 2 did not return a plan id');
       build = this.store.update(build.id, { planId, currentStage: 'queued', currentStep: 'Submitting durable execution job' });
       this.store.appendLog(build.id, { step: 'plan', target: 'computer-2', tool: 'plan_create', result: { planId } });
+      this.emit(build, { category: 'stage', stage: 'planning', severity: 'success', humanMessage: 'Registered the approved execution plan.', technicalPayload: { planId } });
 
       const job = await this.caller('job_submit', {
         tool: 'computer_batch',
@@ -156,6 +185,7 @@ export class BuildService {
         startedAt: new Date().toISOString(),
       });
       this.store.appendLog(build.id, { step: 'job', target: 'computer-2', tool: 'job_submit', result: { jobId, status: 'queued' } });
+      this.emit(build, { category: 'stage', stage: 'implementation', severity: 'info', humanMessage: 'Queued autonomous implementation on Computer 2.', technicalPayload: { jobId } });
       return build;
     } catch (error) {
       const errorClass = classifyBuildError(error);
@@ -167,13 +197,19 @@ export class BuildService {
         errors: [...initial.errors, { timestamp: new Date().toISOString(), errorClass, message: error instanceof Error ? error.message : String(error) }],
       });
       this.store.appendLog(failed.id, { step: 'start', target: 'computer-2', errorClass, result: 'failed', message: error instanceof Error ? error.message : String(error) });
+      this.emit(failed, {
+        category: blocked ? 'blocked' : 'repair', stage: failed.currentStage, severity: blocked ? 'error' : 'warning',
+        humanMessage: blocked ? 'Execution needs a user-only dependency.' : 'Computer 2 connection interrupted; recovery is queued.',
+        technicalPayload: { errorClass, repairAction: blocked ? '' : 'Reconnect and resume the persisted job' },
+      });
       throw Object.assign(error instanceof Error ? error : new Error(String(error)), { build: failed });
     }
   }
 
   async refresh(buildId: string): Promise<BuildRecord> {
-    const build = this.store.get(buildId);
+    let build = this.store.get(buildId);
     if (!build) throw new Error(`Unknown build: ${buildId}`);
+    build = this.ingestWorkerEvents(build);
     if (!build.jobId || ['complete', 'failed', 'cancelled', 'blocked'].includes(build.status)) return build;
     try {
       const remote = recordOf(await this.caller('job_status', { job_id: build.jobId }));
@@ -192,6 +228,14 @@ export class BuildService {
       });
       if (remoteStatus !== build.status || retryCount !== build.retryCount) {
         this.store.appendLog(updated.id, { step: 'job-status', target: 'computer-2', tool: 'job_status', attempt, result: { status: remoteStatus, retryCount } });
+        const recovered = build.status === 'interrupted' && nextStatus === 'running';
+        this.emit(updated, {
+          category: recovered ? 'recovered' : retryCount > build.retryCount ? 'repair' : 'stage',
+          stage: updated.currentStage,
+          severity: nextStatus === 'failed' ? 'error' : recovered ? 'success' : 'info',
+          humanMessage: recovered ? 'Recovered the interrupted Computer 2 job and continued execution.' : `Computer 2 job is ${remoteStatus}.`,
+          technicalPayload: { status: remoteStatus, retryCount, attempt },
+        });
       }
       if (nextStatus === 'failed') return await this.recordRemoteFailure(updated, remote);
       return updated;
@@ -204,6 +248,11 @@ export class BuildService {
         errors: [...build.errors, { timestamp: new Date().toISOString(), errorClass, message: error instanceof Error ? error.message : String(error) }],
       });
       this.store.appendLog(updated.id, { step: 'job-status', target: 'computer-2', tool: 'job_status', errorClass, attempt: build.retryCount + 1, repairAction: 'Reconnect to Computer 2 and poll the persisted job again', result: 'interrupted' });
+      this.emit(updated, {
+        category: 'repair', stage: 'recovery', severity: 'warning',
+        humanMessage: 'Lost the Computer 2 connection; reconnecting to the persisted job.',
+        technicalPayload: { errorClass, repairAction: 'Reconnect to Computer 2 and poll the persisted job again' },
+      });
       return updated;
     }
   }
@@ -258,7 +307,12 @@ export class BuildService {
       checkpoints: [...build.checkpoints, { timestamp: new Date().toISOString(), remote, evidencePath: completionPath }],
     });
     for (const repair of evidence.repairs || []) this.store.appendLog(completed.id, { step: 'repair', target: 'computer-2', attempt, errorClass: String(repair.errorClass || 'unknown'), repairAction: String(repair.repairAction || ''), result: repair.result });
+    for (const repair of evidence.repairs || []) this.emit(completed, {
+      category: 'repair', stage: 'verification', severity: 'warning', humanMessage: String(repair.repairAction || 'Repaired a recoverable verification failure.'),
+      technicalPayload: repair,
+    });
     this.store.appendLog(completed.id, { step: 'completion-gate', target: 'computer-2', tool: 'job_result', attempt, result: { status: 'complete', appUrl: completed.appUrl, verification: completed.verification } });
+    this.emit(completed, { category: 'verification-complete', stage: 'complete', severity: 'success', humanMessage: 'Production verification passed and the local application is running.', technicalPayload: { appUrl: completed.appUrl, verification: completed.verification } });
     return completed;
   }
 
@@ -269,6 +323,7 @@ export class BuildService {
       errors: [...build.errors, { timestamp: new Date().toISOString(), errorClass, message }], result,
     });
     this.store.appendLog(failed.id, { step: 'completion-gate', target: 'computer-2', errorClass, result: 'failed', message });
+    this.emit(failed, { category: 'blocked', stage: 'verification', severity: 'error', humanMessage: 'The production completion gate failed.', technicalPayload: { errorClass, message } });
     return failed;
   }
 
@@ -323,6 +378,7 @@ export class BuildService {
     await this.terminateWorker(build, 'cancel-worker');
     const cancelled = this.store.update(build.id, { status: 'cancelled', currentStage: 'cancelled', currentStep: 'Cancelled by user', finishedAt: new Date().toISOString() });
     this.store.appendLog(cancelled.id, { step: 'cancel', target: 'computer-2', tool: 'job_cancel', result: 'cancelled' });
+    this.emit(cancelled, { category: 'cancelled', stage: 'cancelled', severity: 'warning', humanMessage: 'Build cancelled by the user.' });
     return cancelled;
   }
 

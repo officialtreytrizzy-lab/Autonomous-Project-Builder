@@ -41,6 +41,7 @@ export type BuildRecord = {
   intakeId?: string;
   briefVersionId?: string;
   approvalHash?: string;
+  workerEventOffset?: number;
 };
 
 export type BuildLogEvent = {
@@ -168,6 +169,7 @@ export class BuildStore {
       ...(input.intakeId ? { intakeId: input.intakeId } : {}),
       ...(input.briefVersionId ? { briefVersionId: input.briefVersionId } : {}),
       ...(input.approvalHash ? { approvalHash: input.approvalHash } : {}),
+      workerEventOffset: 0,
     };
     this.write(record);
     return record;

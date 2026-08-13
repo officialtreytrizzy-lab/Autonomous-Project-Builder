@@ -367,6 +367,11 @@ export class IntakeStore {
       .all(projectId, sequence, limit) as Array<{ event_json: string }>;
     return rows.map((row) => parse<ProjectEvent>(row.event_json));
   }
+
+  eventSequence(projectId: string, eventId: string) {
+    const row = this.database.prepare('SELECT sequence FROM project_events WHERE project_id = ? AND event_id = ?').get(projectId, eventId) as { sequence: number } | undefined;
+    return row ? Number(row.sequence) : null;
+  }
 }
 
 const globalIntake = globalThis as typeof globalThis & { __autonomousIntakeStore?: IntakeStore };

@@ -190,10 +190,11 @@ $workspace = Split-Path -Parent $PSScriptRoot
 $PID | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'worker.pid')
 $workerStdout = Join-Path $PSScriptRoot 'worker.stdout.log'
 $workerStderr = Join-Path $PSScriptRoot 'worker.stderr.log'
+$workerEvents = Join-Path $PSScriptRoot 'worker.events.jsonl'
 $prompt = Get-Content -Raw -LiteralPath '${promptPath.replaceAll("'", "''")}'
 Set-Location -LiteralPath $workspace
 try {
-  $prompt | & '${codexPath.replaceAll("'", "''")}' exec --ignore-user-config --ignore-rules --ephemeral --sandbox danger-full-access --skip-git-repo-check -C $workspace --output-last-message '${lastMessagePath.replaceAll("'", "''")}' - 1> $workerStdout 2> $workerStderr
+  $prompt | & '${codexPath.replaceAll("'", "''")}' exec --json --ignore-user-config --ignore-rules --ephemeral --sandbox danger-full-access --skip-git-repo-check -C $workspace --output-last-message '${lastMessagePath.replaceAll("'", "''")}' - 1> $workerEvents 2> $workerStderr
   if ($LASTEXITCODE -ne 0) { throw "Codex implementation worker exited with code $LASTEXITCODE" }
 } catch {
   Add-Content -LiteralPath $workerStderr -Value ($_ | Out-String)
