@@ -51,6 +51,7 @@
 - Produces: `resolveDesktopPaths(input): DesktopPaths`
 - Produces: `isAllowedRendererNavigation(url: string, origin: string): boolean`
 - Produces: `restartDelay(attempt: number): number | null`
+- Produces: `secureWindowOptions(): Electron.BrowserWindowConstructorOptions`
 
 - [ ] **Step 1: Write failing runtime tests**
 
@@ -67,6 +68,14 @@ test('renderer navigation is restricted to the exact Builder origin', () => {
 
 test('restart delay stops after five bounded attempts', () => {
   assert.deepEqual([0, 1, 2, 3, 4, 5].map(restartDelay), [500, 1000, 2000, 4000, 8000, null]);
+});
+
+test('native window policy denies renderer privileges', () => {
+  assert.deepEqual(secureWindowOptions().webPreferences, {
+    nodeIntegration: false,
+    contextIsolation: true,
+    sandbox: true,
+  });
 });
 ```
 
@@ -124,19 +133,22 @@ git commit -m "feat: add secure desktop runtime contract"
 - [ ] **Step 1: Write failing Electron security and lifecycle contract tests**
 
 ```js
-test('desktop window disables renderer privileges', () => {
-  const source = readFileSync('desktop/main.mjs', 'utf8');
-  assert.match(source, /nodeIntegration:\s*false/);
-  assert.match(source, /contextIsolation:\s*true/);
-  assert.match(source, /sandbox:\s*true/);
-  assert.doesNotMatch(source, /preload\s*:/);
+test('health polling accepts only the Builder architecture', async () => {
+  const compatible = await waitForCompatibleBuilder({
+    origin: 'http://127.0.0.1:3107',
+    attempts: 1,
+    fetchImpl: async () => new Response(JSON.stringify({ status: 'ready', architecture: 'hybrid-docker-mcp' })),
+  });
+  assert.equal(compatible.status, 'compatible');
 });
 
-test('desktop uses a single-instance lock and bounded local startup', () => {
-  const source = readFileSync('desktop/main.mjs', 'utf8');
-  assert.match(source, /requestSingleInstanceLock/);
-  assert.match(source, /waitForCompatibleBuilder/);
-  assert.match(source, /restartDelay/);
+test('health polling rejects an unrelated listener', async () => {
+  const incompatible = await waitForCompatibleBuilder({
+    origin: 'http://127.0.0.1:3107',
+    attempts: 1,
+    fetchImpl: async () => new Response(JSON.stringify({ status: 'ok' })),
+  });
+  assert.equal(incompatible.status, 'incompatible');
 });
 ```
 
@@ -165,7 +177,7 @@ const window = new BrowserWindow({
 });
 ```
 
-Implement single-instance focus, compatible health detection, Computer 2 root discovery, allow-listed environment import, external-or-owned server selection, bounded owned-server restart, startup error display, exact-origin navigation policy, and shutdown of only the owned Builder child.
+Implement single-instance focus in the Electron entry and keep testable health polling, Computer 2 discovery, child-process launch parameters, and restart decisions in `desktop/runtime.mjs`. The main process consumes those policies for external-or-owned server selection, startup error display, exact-origin navigation, and shutdown of only the owned Builder child.
 
 - [ ] **Step 5: Add the startup document and development command**
 
@@ -207,15 +219,19 @@ git commit -m "feat: open Builder in secure desktop shell"
 
 ```js
 test('desktop packaging creates NSIS desktop and Start Menu shortcuts', () => {
-  const config = readFileSync('desktop-builder.yml', 'utf8');
-  assert.match(config, /target:\s*nsis/);
-  assert.match(config, /createDesktopShortcut:\s*true/);
-  assert.match(config, /createStartMenuShortcut:\s*true/);
-  assert.match(config, /artifactName:.*Setup/);
+  const config = loadDesktopBuilderConfig('desktop-builder.yml');
+  assert.equal(config.win.target, 'nsis');
+  assert.equal(config.nsis.createDesktopShortcut, true);
+  assert.equal(config.nsis.createStartMenuShortcut, true);
+  assert.equal(config.nsis.shortcutName, 'Autonomous Project Builder');
 });
 
-test('Next produces a standalone server for the desktop bundle', () => {
-  assert.match(readFileSync('next.config.ts', 'utf8'), /output:\s*["']standalone["']/);
+test('staging copies standalone static assets and rejects secret files', () => {
+  const fixture = createStandaloneFixture();
+  prepareDesktopBundle(fixture);
+  assert.equal(existsSync(join(fixture.standalone, '.next/static/chunk.js')), true);
+  writeFileSync(join(fixture.standalone, '.env'), 'MCP_AUTH_TOKEN=secret');
+  assert.throws(() => validateDesktopBundle(fixture.standalone), /forbidden packaged file/i);
 });
 ```
 
@@ -290,10 +306,15 @@ git commit -m "build: package standalone Builder desktop runtime"
 
 ```js
 test('desktop install helper resolves exactly one generated setup executable', () => {
-  const source = readFileSync('scripts/install-desktop.ps1', 'utf8');
-  assert.match(source, /Autonomous-Project-Builder-Setup-.*\.exe/);
-  assert.match(source, /Start-Process.*-Wait/);
-  assert.match(source, /Resolve-Path/);
+  const output = mkdtempSync(join(tmpdir(), 'desktop-installer-'));
+  const setup = join(output, 'Autonomous-Project-Builder-Setup-0.1.0.exe');
+  writeFileSync(setup, 'fixture');
+  const result = spawnSync('powershell', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/install-desktop.ps1',
+    '-OutputDirectory', output, '-ValidateOnly',
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout.trim(), setup);
 });
 ```
 
@@ -305,7 +326,7 @@ Expected: FAIL because `scripts/install-desktop.ps1` does not exist.
 
 - [ ] **Step 3: Implement the validated installer helper**
 
-The PowerShell helper resolves `dist-desktop` inside the repository, requires exactly one matching Setup executable, refuses a path outside `dist-desktop`, launches it with `Start-Process -Wait`, and returns the installer exit code.
+The PowerShell helper accepts `-OutputDirectory` for test isolation and `-ValidateOnly` for non-mutating resolution. It resolves `dist-desktop` inside the repository by default, requires exactly one matching Setup executable, refuses a path outside the requested output directory, emits the absolute installer path in validation mode, otherwise launches it with `Start-Process -Wait`, and returns the installer exit code.
 
 - [ ] **Step 4: Add the installation command and verify GREEN**
 
@@ -379,4 +400,3 @@ Close and reopen the installed app. Verify history remains present, the Builder 
 - [ ] **Step 8: Record final evidence**
 
 Record the installer absolute path, installed executable path, shortcut paths, Builder URL, desktop process/window evidence, repository verification counts, and any signing warning. Do not claim a signed installer unless an Authenticode certificate was actually applied and verified.
-
