@@ -26,6 +26,18 @@ test('a Computer 2 outage fails core readiness', () => {
   assert.deepEqual(summary.unavailableCore, ['computer2']);
 });
 
+test('document vision stays optional globally but can be required for an active visual intake', () => {
+  const services = {
+    computer2: { ok: true },
+    localRuntime: { ok: true },
+    documentVision: { ok: false, detail: 'Recovery required' },
+  };
+  assert.equal(summarizeReadiness(services).ready, true);
+  const intakeReadiness = summarizeReadiness(services, ['documentVision']);
+  assert.equal(intakeReadiness.ready, false);
+  assert.deepEqual(intakeReadiness.unavailableRequired, ['documentVision']);
+});
+
 test('gateway probes keep authorization server-side', async () => {
   let authorization = '';
   const server = createServer((request, response) => {

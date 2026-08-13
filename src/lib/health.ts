@@ -40,13 +40,14 @@ export async function probeService(url: string, options: ProbeOptions = {}): Pro
 
 const CORE_CAPABILITIES = ['computer2', 'localRuntime'] as const;
 
-export function summarizeReadiness(services: Record<string, ServiceProbe>) {
+export function summarizeReadiness(services: Record<string, ServiceProbe>, requiredCapabilities: string[] = []) {
   const unavailableCore = CORE_CAPABILITIES.filter((name) => !services[name]?.ok);
+  const unavailableRequired = requiredCapabilities.filter((name) => !services[name]?.ok);
   const degradedCapabilities = Object.entries(services)
-    .filter(([name, service]) => !CORE_CAPABILITIES.includes(name as (typeof CORE_CAPABILITIES)[number]) && !service.ok)
+    .filter(([name, service]) => !CORE_CAPABILITIES.includes(name as (typeof CORE_CAPABILITIES)[number]) && !requiredCapabilities.includes(name) && !service.ok)
     .map(([name]) => name);
-  const ready = unavailableCore.length === 0;
-  return { ready, status: ready ? 'ready' as const : 'unavailable' as const, unavailableCore, degradedCapabilities };
+  const ready = unavailableCore.length === 0 && unavailableRequired.length === 0;
+  return { ready, status: ready ? 'ready' as const : 'unavailable' as const, unavailableCore, unavailableRequired, degradedCapabilities };
 }
 
 async function probeComputer2AndChrome(url: string): Promise<{ computer2: ServiceProbe; authenticatedChrome: ServiceProbe }> {
@@ -70,13 +71,15 @@ async function probeComputer2AndChrome(url: string): Promise<{ computer2: Servic
 }
 
 export async function collectHealthReport() {
+  const { discoverDocumentCapabilities } = await import('./intake/capabilities');
   const computer2Url = process.env.COMPUTER2_HEALTH_URL || 'http://127.0.0.1:3000/health/deep';
   const gatewayUrl = process.env.DOCKER_MCP_GATEWAY_HEALTH_URL || 'http://127.0.0.1:8811/health';
   const gatewayToken = process.env.DOCKER_MCP_GATEWAY_TOKEN?.trim() || process.env.MCP_GATEWAY_AUTH_TOKEN?.trim();
-  const [{ computer2, authenticatedChrome }, dockerGateway, windmill] = await Promise.all([
+  const [{ computer2, authenticatedChrome }, dockerGateway, windmill, documentCapabilities] = await Promise.all([
     probeComputer2AndChrome(computer2Url),
     probeService(gatewayUrl, gatewayUrl.endsWith('/mcp') ? { bearerToken: gatewayToken } : {}),
     probeService(process.env.WINDMILL_URL || 'http://127.0.0.1/'),
+    discoverDocumentCapabilities(),
   ]);
   const services = {
     computer2,
@@ -84,6 +87,10 @@ export async function collectHealthReport() {
     dockerGateway,
     windmill,
     authenticatedChrome,
+    documentVision: {
+      ok: documentCapabilities.vision.available,
+      detail: documentCapabilities.vision.detail,
+    },
   };
   return { services, readiness: summarizeReadiness(services) };
 }
