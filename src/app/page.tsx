@@ -23,6 +23,20 @@ import {
 } from 'lucide-react';
 import type { BuildAnalysis, BuildRequest, ExecutionStep, ExecutionTarget, IngredientLevel } from '@/lib/builder';
 
+declare global {
+  interface Window {
+    desktopApi?: {
+      isDesktop: boolean;
+      platform: string;
+      sendNotification: (title: string, body: string) => void;
+      openPath: (targetPath: string) => Promise<string>;
+      minimize: () => void;
+      maximize: () => void;
+      close: () => void;
+    };
+  }
+}
+
 const initialRequest: BuildRequest = {
   name: 'Autonomous Builder',
   objective: 'Continue building and ship a production-ready app without stopping for recoverable issues.',
@@ -81,6 +95,7 @@ export default function Home() {
   const [activeJob, setActiveJob] = useState<ActiveJobState | null>(null);
   const [elapsed, setElapsed] = useState<string>('00:00');
   const [healthStatus, setHealthStatus] = useState<{ status: string; computer2?: boolean; dockerGateway?: boolean; windmill?: boolean } | null>(null);
+  const [isDesktop, setIsDesktop] = useState(false);
 
   // Load history, restore any ongoing active job, and check for interrupted jobs
   useEffect(() => {
@@ -96,6 +111,11 @@ export default function Home() {
 
     // Fetch inline health status
     fetch('/api/health').then((r) => r.json()).then((data) => setHealthStatus(data)).catch(() => {});
+
+    // Check if running inside Electron desktop shell
+    if (typeof window !== 'undefined' && window.desktopApi?.isDesktop) {
+      queueMicrotask(() => setIsDesktop(true));
+    }
   }, []);
 
   // Elapsed timer ticker for active build
@@ -184,6 +204,12 @@ export default function Home() {
             return updated;
           });
           pushLog('Production verification passed. Autonomous build complete.', 'success');
+          if (typeof window !== 'undefined' && window.desktopApi?.sendNotification) {
+            window.desktopApi.sendNotification(
+              'Autonomous Build Complete 🎉',
+              'Autonomous build passed all verification gates and is ready for production.',
+            );
+          }
         }
       }
     } catch {}
@@ -325,7 +351,10 @@ export default function Home() {
     <main className="shell">
       <header className="topbar">
         <div>
-          <div className="eyebrow"><Activity size={15} /> LIVE CONTROL PLANE</div>
+          <div className="eyebrow">
+            <Activity size={15} /> LIVE CONTROL PLANE
+            {isDesktop && <span className="desktop-pill"><Laptop size={11} /> DESKTOP APP</span>}
+          </div>
           <h1>Autonomous Builder</h1>
           <p>One command in. Ingredient analysis, routing, execution, recovery, verification and deployment out.</p>
         </div>
