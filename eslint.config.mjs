@@ -1,7 +1,7 @@
-﻿import { defineConfig, globalIgnores } from 'eslint/config';
+import { defineConfig, globalIgnores } from 'eslint/config';
 import nextVitals from 'eslint-config-next/core-web-vitals';
 
 export default defineConfig([
   ...nextVitals,
-  globalIgnores(['.next/**', 'node_modules/**', 'out/**', 'build/**', 'dist-desktop/**', 'dist-worker/**', 'next-env.d.ts']),
+  globalIgnores(['.next/**', 'node_modules/**', 'out/**', 'build/**', 'dist-desktop/**', 'dist-worker/**', 'tmp/**', 'next-env.d.ts']),
 ]);

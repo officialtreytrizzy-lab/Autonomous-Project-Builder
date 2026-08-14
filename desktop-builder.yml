@@ -21,12 +21,18 @@
   "extraResources": [
     {
       "from": ".next/standalone",
-      "to": "builder"
+      "to": "builder",
+      "filter": ["**/*"]
     },
     {
       "from": "dist-worker",
       "to": "builder-worker",
-      "filter": ["intake-worker.mjs"]
+      "filter": [
+        "intake-worker.mjs",
+        "build-worker.mjs",
+        "pdf.worker.mjs",
+        "standard_fonts/**/*"
+      ]
     }
   ],
   "win": {

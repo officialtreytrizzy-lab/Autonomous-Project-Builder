@@ -61,7 +61,7 @@ async function defaultSynthesize(evidence: EvidenceRecord[]) {
   }
   return synthesizeBrief(
     evidence,
-    createOllamaVisionClient({ endpoint: capability.ollama.endpoint, model: capability.vision.model }),
+    createOllamaVisionClient({ endpoint: capability.ollama.endpoint, model: capability.synthesis.model || capability.vision.model }),
   );
 }
 
@@ -70,6 +70,17 @@ export async function runIntakeWorker(deps: WorkerDependencies) {
   if (!intake) throw new Error(`Unknown intake: ${deps.intakeId}`);
   const project = deps.store.getProject(intake.projectId);
   if (!project) throw new Error(`Unknown project: ${intake.projectId}`);
+  const existingBrief = deps.store.currentBrief(intake.id);
+  const currentSources = deps.store.currentSources(intake.id).filter((item) => item.availability === 'available');
+  const existingBriefIsComplete = existingBrief?.visualCoverage.complete && currentSources.every((source) => (
+    source.processingStatus === 'complete' && Number(source.pageCount || 0) === Number(source.inspectedPageCount || 0)
+  ));
+  if (existingBrief && existingBriefIsComplete) {
+    const hasUnresolvedDecisions = deps.store.decisionsForBrief(existingBrief.id).some((decision) => decision.required && !decision.resolution.trim());
+    deps.store.updateIntake(intake.id, { status: hasUnresolvedDecisions ? 'awaiting-resolution' : 'awaiting-approval' });
+    deps.store.updateProject(project.id, { state: 'awaiting-approval' });
+    return existingBrief;
+  }
   deps.store.updateIntake(intake.id, { status: 'extracting' });
   deps.store.updateProject(project.id, { state: 'understanding' });
   emit(deps.store, project.id, { category: 'intake', stage: 'understanding', severity: 'info', humanMessage: 'Understanding project evidence.' });
@@ -77,7 +88,7 @@ export async function runIntakeWorker(deps: WorkerDependencies) {
   try {
     let totalPages = 0;
     let inspectedPages = 0;
-    for (const source of deps.store.currentSources(intake.id).filter((item) => item.availability === 'available')) {
+    for (const source of currentSources) {
       const completedPages = new Set(
         deps.store.evidenceForBriefSource(intake.id, source.sourceId)
           .filter((item) => item.revisionId === source.revisionId && item.kind === 'page-overview')

@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import type { BuildRequest, ExecutionStep } from './builder';
 import type { VerificationCheck } from './build-store';
 import type { ApprovalBuildConfiguration, BriefDecision, BuildBrief, SourceManifestItem } from './intake/types';
@@ -49,7 +49,7 @@ export function classifyBuildError(error: unknown): ErrorClass {
   if (/irreversible|billing plan|legal approval|high-impact decision/.test(message)) return 'irreversible decision';
   if (/provided by (?:the )?user|user input|required credential|user-only|must provide/.test(message)) return 'user-required input';
   if (/chrome|browser bridge|extension relay|ensurebridge/.test(message)) return 'browser bridge';
-  if (/429|rate.?limit|too many requests|quota/.test(message)) return 'rate limit';
+  if (/429|rate.?limit|too many requests|quota|usage limit|message cap|hit your usage/.test(message)) return 'rate limit';
   if (/401|403|unauthori[sz]ed|forbidden|authentication|invalid credential|expired credential/.test(message)) return 'authentication';
   if (/econn|timeout|timed out|network|socket|connection reset|dns|fetch failed|streamable http|method not allowed/.test(message)) return 'transient/network';
   if (/docker daemon|dependency unavailable|missing dependency|executable not found|command not found/.test(message)) return 'dependency unavailable';
@@ -76,9 +76,19 @@ export function validateCompletionEvidence(value: CompletionEvidence) {
   return { ok: true, reason: '' };
 }
 
-function buildPrompt(input: { buildId: string; port: number; request: BuildRequest; steps: ExecutionStep[]; completionPath: string }) {
+function buildPrompt(input: {
+  buildId: string;
+  port: number;
+  workspace: string;
+  request: BuildRequest;
+  steps: ExecutionStep[];
+  completionPath: string;
+}) {
   const localOnly = input.request.deployment !== 'vercel';
-  return `You are the implementation worker for Autonomous Project Builder build ${input.buildId}.
+  return `AUTONOMOUS PROJECT BUILDER CHATGPT HANDOFF
+
+You are the implementation worker for Autonomous Project Builder build ${input.buildId}.
+You are running in the user's authenticated ChatGPT session and have the connected Computer 2 MCP available.
 
 GOAL
 ${input.request.objective || 'Build the requested production application.'}
@@ -86,25 +96,39 @@ ${input.request.objective || 'Build the requested production application.'}
 PROJECT NAME
 ${input.request.name || 'Local project'}
 
+LOCAL WORKSPACE
+${input.workspace}
+
+CHATGPT + MCP EXECUTION RULES
+- Use the connected Computer 2 MCP as your machine execution layer. Use its filesystem, terminal, job, browser, and local application tools as needed.
+- Do not invoke Codex CLI, Gemini CLI, Claude Code, or another local coding-model CLI. ChatGPT is the implementation brain for this build.
+- For authenticated browser work, use the real Computer 2 authenticated Chrome bridge and its authenticated_chrome_* tools. Do not replace the signed-in Chrome identity path with an unauthenticated Playwright browser.
+- Use Docker MCP only for portable service integrations that this build actually requires.
+- Use Windmill for durable workflow/schedule/orchestration steps when the execution route marks them for Windmill. Do not invent a cloud dependency for a local-only build.
+
 EXECUTION CONTRACT
 - If .builder/approved-brief.md exists, read it first. It is the immutable, user-approved execution contract and is authoritative for scope and acceptance criteria.
 - This build direction is already approved. Start implementation immediately; do not pause for brainstorming, design review, plan approval, or routine confirmation.
-- Do not create subagents or wait for another conversation. You are the implementation worker and must finish the build in this invocation.
-- Work only inside the current workspace.
+- Do not create subagents or wait for another conversation. Finish the build through the connected MCP tools.
+- Work only inside the local workspace above, except when inspecting/reusing existing machine resources or required service integrations.
 - Produce a real, complete, production-ready application. No demo data, fake users, placeholder buttons, TODO implementations, or stale samples.
 - Inspect existing resources before requesting accounts, credentials, subscriptions, hosting, databases, domains, APIs, or paid tools.
-- ${localOnly ? 'Do not use GitHub or Vercel. Build and serve the application privately on Computer 2.' : 'Vercel is an optional shipping destination for this generated project; the Builder itself remains local.'}
-- The finished production application must listen on 127.0.0.1:${input.port} and remain running after this worker exits.
-- Use a production start command, launch it as a hidden detached process, and verify the HTTP response.
+- ${localOnly ? 'Do not use GitHub or Vercel. Build and serve the application privately on Computer 2.' : 'Vercel is only an optional shipping destination for the generated project; the Builder itself remains local.'}
+- The finished production application must listen on 127.0.0.1:${input.port} and remain running after implementation completes.
+- Use a production start command, launch it as a hidden/detached local process where appropriate, and verify the HTTP response.
 - Run dependency installation, lint, typecheck where applicable, unit tests, integration tests where applicable, production build, critical user-flow tests, runtime boot, HTTP/API checks, route/link checks, placeholder audit, and fatal console-error checks.
-- Treat absent tools as recoverable when safe: install dependencies and retry. For deterministic lint, type, build, or test failures, diagnose and repair before retrying. Allow at most three repair cycles.
-- Do not claim success unless the completion evidence described below is written and every applicable gate passes.
+- Treat absent tools/services as recoverable when safe: repair/restart/install and retry. For deterministic lint, type, build, or test failures, diagnose and repair before retrying.
+- Continue through YELLOW/recoverable issues. Stop only for a genuine user-only blocker.
+- Never print or copy MCP tokens, cookies, passwords, authorization headers, or service secrets into application files, logs, or completion evidence.
+- Do not claim success unless the completion evidence below is written and every applicable gate passes.
 
 EXECUTION ROUTE
 ${input.steps.map((step, index) => `${index + 1}. [${step.target}] ${step.title}: ${step.reason}`).join('\n')}
 
 COMPLETION EVIDENCE
-Write UTF-8 JSON to this exact path: ${input.completionPath}
+Write UTF-8 JSON to this exact path:
+${input.completionPath}
+
 Use this shape:
 {
   "status": "complete" | "blocked" | "failed",
@@ -115,7 +139,8 @@ Use this shape:
   "repairs": [{ "errorClass": "...", "diagnosis": "...", "repairAction": "...", "result": "..." }],
   "result": { "summary": "...", "runtimePid": 1234 }
 }
-Include all ten named verification gates exactly once. A skipped gate must explain why it is not applicable. Never include secrets in this file or command output.
+
+Include all ten named verification gates exactly once. A skipped gate must explain why it is not applicable.
 `;
 }
 
@@ -132,15 +157,10 @@ export function writeApprovedBrief(input: {
   approvalHash: string;
 }) {
   const content = [
-    '# Approved Build Brief',
-    '',
+    '# Approved Build Brief', '',
     `Brief version: ${input.brief.version}`,
-    `Approval contract: ${input.approvalHash}`,
-    '',
-    '## Outcome',
-    '',
-    input.brief.content.outcome,
-    '',
+    `Approval contract: ${input.approvalHash}`, '',
+    '## Outcome', '', input.brief.content.outcome, '',
     list('Users', input.brief.content.users),
     list('Critical flows', input.brief.content.flows),
     list('Requirements', input.brief.content.requirements),
@@ -149,31 +169,34 @@ export function writeApprovedBrief(input: {
     list('Exclusions', input.brief.content.exclusions),
     list('Acceptance tests', input.brief.content.acceptanceTests),
     list('Approved assumptions', input.brief.content.assumptions),
-    '## Resolved decisions',
-    '',
-    ...(input.decisions.length ? input.decisions.map((decision) => `- ${decision.question}: ${decision.resolution}`) : ['- None']),
-    '',
-    '## Source manifest',
-    '',
-    ...input.sources.map((source) => `- ${source.originalFilename} · revision ${source.revision} · ${source.mimeType} · sha256 ${source.contentHash}`),
-    '',
-    '## Build configuration',
-    '',
+    '## Resolved decisions', '',
+    ...(input.decisions.length ? input.decisions.map((decision) => `- ${decision.question}: ${decision.resolution}`) : ['- None']), '',
+    '## Source manifest', '',
+    ...input.sources.map((source) => `- ${source.originalFilename} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· revision ${source.revision} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${source.mimeType} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· sha256 ${source.contentHash}`), '',
+    '## Build configuration', '',
     `- Deployment: ${input.buildConfiguration.deployment}`,
     `- Repository: ${input.buildConfiguration.repository || 'none (private local workspace)'}`,
     `- Backend: ${input.buildConfiguration.backend}`,
     `- Workflow: ${input.buildConfiguration.workflow}`,
     `- Authenticated browser required: ${input.buildConfiguration.needsAuthenticatedBrowser ? 'yes' : 'no'}`,
-    `- Windows host required: ${input.buildConfiguration.needsWindowsHost ? 'yes' : 'no'}`,
-    '',
+    `- Windows host required: ${input.buildConfiguration.needsWindowsHost ? 'yes' : 'no'}`, '',
     `Visual coverage: ${input.brief.visualCoverage.inspectedPages}/${input.brief.visualCoverage.totalPages} pages inspected.`,
   ].join('\n');
   const path = join(input.workspace, '.builder', 'approved-brief.md');
   writeFileSync(path, content, { encoding: 'utf8', flag: 'wx' });
   return path;
 }
+function psLiteral(value: string) {
+  return value.replaceAll("'", "''");
+}
 
-export function prepareBuildWorkspace(input: { root: string; buildId: string; port: number; request: BuildRequest; steps: ExecutionStep[] }) {
+export function prepareBuildWorkspace(input: {
+  root: string;
+  buildId: string;
+  port: number;
+  request: BuildRequest;
+  steps: ExecutionStep[];
+}) {
   const workspace = resolve(input.root, `${slugify(input.request.name || input.request.objective || 'local-project')}-${input.buildId.replace(/^build-/, '').slice(0, 8)}`);
   const controlDirectory = join(workspace, '.builder');
   mkdirSync(controlDirectory, { recursive: true });
@@ -182,35 +205,47 @@ export function prepareBuildWorkspace(input: { root: string; buildId: string; po
   const lastMessagePath = join(controlDirectory, 'last-message.txt');
   const scriptPath = join(controlDirectory, 'execute-build.ps1');
   const launcherPath = join(controlDirectory, 'launch-build.ps1');
-  const defaultCodexPath = process.env.APPDATA ? join(process.env.APPDATA, 'npm', 'codex.cmd') : '';
-  const codexPath = process.env.CODEX_EXE?.trim() || (defaultCodexPath && existsSync(defaultCodexPath) ? defaultCodexPath : 'codex.exe');
-  writeFileSync(promptPath, buildPrompt({ ...input, completionPath }), { encoding: 'utf8', mode: 0o600 });
+  const heartbeatPath = join(controlDirectory, 'worker-heartbeat.json');
+  const handoffPath = join(controlDirectory, 'chatgpt-handoff.json');
+  const intakeWorkerPath = process.env.BUILDER_INTAKE_WORKER?.trim();
+  const buildWorkerPath = process.env.BUILDER_BUILD_WORKER?.trim()
+    || (intakeWorkerPath ? join(dirname(intakeWorkerPath), 'build-worker.mjs') : join(process.cwd(), 'dist-worker', 'build-worker.mjs'));
+  const workerExecutable = process.execPath;
+  const useElectronAsNode = process.env.ELECTRON_RUN_AS_NODE === '1';
+
+  writeFileSync(
+    promptPath,
+    buildPrompt({ ...input, workspace, completionPath }),
+    { encoding: 'utf8', mode: 0o600 },
+  );
+
   const script = `$ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent $PSScriptRoot
 $PID | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'worker.pid')
-$workerStdout = Join-Path $PSScriptRoot 'worker.stdout.log'
-$workerStderr = Join-Path $PSScriptRoot 'worker.stderr.log'
-$workerEvents = Join-Path $PSScriptRoot 'worker.events.jsonl'
-$prompt = Get-Content -Raw -LiteralPath '${promptPath.replaceAll("'", "''")}'
-Set-Location -LiteralPath $workspace
-try {
-  $prompt | & '${codexPath.replaceAll("'", "''")}' exec --json --ignore-user-config --ignore-rules --ephemeral --sandbox danger-full-access --skip-git-repo-check -C $workspace --output-last-message '${lastMessagePath.replaceAll("'", "''")}' - 1> $workerEvents 2> $workerStderr
-  if ($LASTEXITCODE -ne 0) { throw "Codex implementation worker exited with code $LASTEXITCODE" }
-} catch {
-  Add-Content -LiteralPath $workerStderr -Value ($_ | Out-String)
-  throw
-}
-if (-not (Test-Path -LiteralPath '${completionPath.replaceAll("'", "''")}')) { throw 'Completion evidence was not produced' }
-$evidence = Get-Content -Raw -LiteralPath '${completionPath.replaceAll("'", "''")}' | ConvertFrom-Json
-if ($evidence.status -ne 'complete') { throw "Build ended with status $($evidence.status)" }
+$runtime = '${psLiteral(workerExecutable)}'
+$buildWorker = '${psLiteral(buildWorkerPath)}'
+if (-not (Test-Path -LiteralPath $buildWorker)) { throw "Bundled ChatGPT build worker is missing: $buildWorker" }
+if ('${useElectronAsNode ? '1' : '0'}' -eq '1') { $env:ELECTRON_RUN_AS_NODE = '1' }
+$workerArgs = @(
+  '--workspace', '${psLiteral(workspace)}',
+  '--prompt', '${psLiteral(promptPath)}',
+  '--completion', '${psLiteral(completionPath)}',
+  '--last-message', '${psLiteral(lastMessagePath)}',
+  '--heartbeat', '${psLiteral(heartbeatPath)}',
+  '--handoff', '${psLiteral(handoffPath)}',
+  '--build', '${psLiteral(input.buildId)}'
+)
+& $runtime $buildWorker @workerArgs
+if ($LASTEXITCODE -ne 0) { throw "ChatGPT implementation worker exited with code $LASTEXITCODE" }
 `;
+
   writeFileSync(scriptPath, script, { encoding: 'utf8', mode: 0o700 });
   const taskName = `AutonomousBuilder-${input.buildId.replace(/[^a-zA-Z0-9-]/g, '')}`;
   const launcher = `$ErrorActionPreference = 'Stop'
 $controlDirectory = Split-Path -Parent $PSCommandPath
 $taskName = '${taskName}'
 $argument = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${scriptPath.replaceAll('"', '`"')}"'
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument -WorkingDirectory '${workspace.replaceAll("'", "''")}'
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument -WorkingDirectory '${psLiteral(workspace)}'
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(10)
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
@@ -219,9 +254,23 @@ Start-ScheduledTask -TaskName $taskName
 $taskName | Set-Content -LiteralPath (Join-Path $controlDirectory 'worker.task')
 Start-Sleep -Seconds 2
 Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-[pscustomobject]@{ launched = $true; task = $taskName } | ConvertTo-Json -Compress
+[pscustomobject]@{ launched = $true; task = $taskName; worker = 'chatgpt-mcp' } | ConvertTo-Json -Compress
 `;
   writeFileSync(launcherPath, launcher, { encoding: 'utf8', mode: 0o700 });
+
   const command = `powershell -NoProfile -ExecutionPolicy Bypass -File "${launcherPath.replaceAll('"', '`"')}"`;
-  return { workspace, controlDirectory, promptPath, completionPath, scriptPath, launcherPath, lastMessagePath, command, port: input.port };
+  return {
+    workspace,
+    controlDirectory,
+    promptPath,
+    completionPath,
+    scriptPath,
+    launcherPath,
+    lastMessagePath,
+    heartbeatPath,
+    handoffPath,
+    command,
+    port: input.port,
+    worker: 'chatgpt-mcp' as const,
+  };
 }

@@ -38,14 +38,16 @@ test('worker checkpoints each page and resumes without reprocessing completed pa
     }
     return { totalPages: 3, inspectedPages: 3 };
   };
-  const synthesize = async () => ({
-    brief: {
+  let synthesisCount = 0;
+  const synthesize = async () => {
+    synthesisCount += 1;
+    return { brief: {
       outcome: 'Build it', users: ['Owner'], flows: ['Flow'], requirements: ['Requirement'], designDirection: [],
       dataAndIntegrations: [], exclusions: [], acceptanceTests: ['Pass'], assumptions: [],
     },
     contradictions: [],
     uncertainties: [],
-  });
+  }; };
 
   await assert.rejects(() => runIntakeWorker({ store, intakeId: intake.id, processSource, synthesize }), /controlled interruption/);
   interruptAfterPage = 0;
@@ -56,6 +58,10 @@ test('worker checkpoints each page and resumes without reprocessing completed pa
   assert.equal(store.getIntake(intake.id)?.status, 'awaiting-approval');
   assert.equal(store.currentSources(intake.id)[0].processingStatus, 'complete');
   assert.equal(store.currentSources(intake.id)[0].inspectedPageCount, 3);
+  const replayed = await runIntakeWorker({ store, intakeId: intake.id, processSource, synthesize });
+  assert.equal(replayed.id, completed.id);
+  assert.equal(synthesisCount, 1);
+  assert.equal(store.getIntake(intake.id)?.status, 'awaiting-approval');
 });
 
 test('worker leaves unresolved contradictions as required pre-build decisions', async (t) => {

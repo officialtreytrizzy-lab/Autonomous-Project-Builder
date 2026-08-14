@@ -137,21 +137,24 @@ export function createOllamaVisionClient(options: {
   endpoint?: string;
   model: string;
   fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 }): VisionClient {
   const endpoint = options.endpoint || process.env.OLLAMA_URL?.trim() || 'http://127.0.0.1:11434';
   const fetchImpl = options.fetchImpl || fetch;
+  const timeoutMs = options.timeoutMs ?? 300_000;
   return {
     async inspect(input) {
       const base64 = readFileSync(input.imagePath).toString('base64');
       const response = await fetchImpl(`${endpoint}/api/chat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
           model: options.model,
           stream: false,
+          think: false,
           format: pageSchema,
-          options: { temperature: 0 },
+          options: { temperature: 0, num_predict: 768 },
           messages: [{
             role: 'user',
             images: [base64],
@@ -175,12 +178,13 @@ export function createOllamaVisionClient(options: {
       const response = await fetchImpl(`${endpoint}/api/chat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        signal: AbortSignal.timeout(180_000),
+        signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
           model: options.model,
           stream: false,
+          think: false,
           format: briefSchema,
-          options: { temperature: 0 },
+          options: { temperature: 0, num_predict: 1024 },
           messages: [{
             role: 'user',
             content: [

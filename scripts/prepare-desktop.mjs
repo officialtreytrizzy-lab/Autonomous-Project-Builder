@@ -36,7 +36,7 @@ export function prepareDesktopBundle({ standaloneDirectory, staticDirectory, pub
     throw new Error(`Run the Next production build first; server.js is missing from ${standalone}.`);
   }
   if (!existsSync(staticDirectory)) throw new Error(`Next static assets are missing: ${staticDirectory}`);
-  for (const generatedState of ['.builder', '.vercel']) {
+  for (const generatedState of ['.builder', '.vercel', 'tmp', 'temp', 'output']) {
     rmSync(join(standalone, generatedState), { recursive: true, force: true });
   }
   const staticTarget = join(standalone, '.next', 'static');

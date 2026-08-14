@@ -149,3 +149,71 @@ test('rerun verification creates a new durable job against the same workspace', 
     assert.equal(f.calls.filter((call) => call.tool === 'job_submit').length, 2);
   } finally { f.close(); }
 });
+
+test('Windmill-targeted build creates and persists a real durable orchestration job', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'builder-windmill-'));
+  const store = new BuildStore(join(directory, 'state.db'));
+  const windmillCalls = [];
+  const computerCalls = [];
+  const caller = async (tool, args) => {
+    computerCalls.push({ tool, args });
+    if (tool === 'plan_create') return { id: 'plan-wm-1' };
+    if (tool === 'job_submit') return { job_id: 'job-wm-1', status: 'queued' };
+    if (tool === 'job_cancel') return { job_id: 'job-wm-1', status: 'cancelled' };
+    throw new Error(`Unexpected Computer 2 tool ${tool}`);
+  };
+  const windmill = async (tool, args) => {
+    windmillCalls.push({ tool, args });
+    if (tool === 'deleteScriptByPath') return 'deleted';
+    if (tool === 'createScript') return 'created';
+    if (tool === 'runScriptByPath') return '019ffef4-8e64-e218-0d13-cdb445a1722a';
+    throw new Error(`Unexpected Windmill tool ${tool}`);
+  };
+  let cancelledWindmill = '';
+  const service = new BuildService({
+    store,
+    callComputer2: caller,
+    projectsRoot: join(directory, 'projects'),
+    allocatePort: async () => 3241,
+    callWindmill: windmill,
+    cancelWindmill: async (jobId) => { cancelledWindmill = jobId; return true; },
+    windmillConfigured: () => true,
+  });
+  try {
+    const build = await service.start({ name: 'Durable', objective: 'Use a durable workflow', deployment: 'local', workflow: 'windmill' });
+    const checkpoint = build.checkpoints.find((item) => item.windmillJobId);
+    assert.equal(build.status, 'queued');
+    assert.equal(checkpoint?.windmillJobId, '019ffef4-8e64-e218-0d13-cdb445a1722a');
+    assert.match(String(checkpoint?.windmillScriptPath), /^u\/admin\/autonomous_builder_/);
+    assert.deepEqual(windmillCalls.map((call) => call.tool), ['deleteScriptByPath', 'createScript', 'runScriptByPath']);
+    const create = windmillCalls.find((call) => call.tool === 'createScript');
+    assert.match(create.args.content, /host\.docker\.internal:3107\/api\/builds\/status\?build_id=/);
+    await service.cancel(build.id);
+    assert.equal(cancelledWindmill, '019ffef4-8e64-e218-0d13-cdb445a1722a');
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('unavailable Windmill is capability degradation and does not block the Computer 2 build', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'builder-windmill-yellow-'));
+  const store = new BuildStore(join(directory, 'state.db'));
+  const caller = async (tool) => {
+    if (tool === 'plan_create') return { id: 'plan-yellow' };
+    if (tool === 'job_submit') return { job_id: 'job-yellow', status: 'queued' };
+    throw new Error(`Unexpected tool ${tool}`);
+  };
+  const service = new BuildService({
+    store,
+    callComputer2: caller,
+    projectsRoot: join(directory, 'projects'),
+    allocatePort: async () => 3241,
+    callWindmill: async () => { throw new Error('Windmill should not be called while unconfigured'); },
+    windmillConfigured: () => false,
+  });
+  try {
+    const build = await service.start({ objective: 'Durable but recoverable', deployment: 'local', workflow: 'windmill' });
+    assert.equal(build.status, 'queued');
+    assert.equal(build.errors.at(-1)?.errorClass, 'configuration');
+    assert.match(build.errors.at(-1)?.message || '', /Windmill orchestration is requested/);
+    assert.equal(build.jobId, 'job-yellow');
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});

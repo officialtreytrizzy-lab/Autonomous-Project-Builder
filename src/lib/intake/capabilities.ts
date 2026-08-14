@@ -13,6 +13,7 @@ export type DocumentCapabilityReport = {
   pdfRenderer: { available: boolean; path?: string; detail: string };
   ollama: { installed: boolean; running: boolean; endpoint: string; version?: string };
   vision: { available: boolean; installedCandidates: string[]; model: string; detail: string };
+  synthesis: { available: boolean; installedCandidates: string[]; model: string; detail: string };
 };
 
 export type VisionRecoveryDependencies = {
@@ -30,7 +31,18 @@ type DiscoveryDependencies = {
   commandPath?: (command: string) => Promise<string>;
   wordAvailable?: () => Promise<boolean>;
   localModelNames?: () => string[];
+  rendererCandidates?: () => string[];
+  fileExists?: (path: string) => boolean;
 };
+
+function localRendererCandidates() {
+  const profile = process.env.USERPROFILE?.trim() || '';
+  return [
+    profile ? join(profile, '.cache', 'codex-runtimes', 'codex-primary-runtime', 'dependencies', 'native', 'poppler', 'Library', 'bin', 'pdftoppm.exe') : '',
+    join(process.env.ProgramFiles || 'C:\\Program Files', 'poppler', 'Library', 'bin', 'pdftoppm.exe'),
+    join(process.env.ProgramData || 'C:\\ProgramData', 'chocolatey', 'bin', 'pdftoppm.exe'),
+  ].filter(Boolean);
+}
 
 async function commandPath(command: string) {
   try {
@@ -77,17 +89,22 @@ export async function discoverDocumentCapabilities(deps: DiscoveryDependencies =
   const findCommand = deps.commandPath || commandPath;
   const checkWord = deps.wordAvailable || wordAvailable;
   const readLocalModels = deps.localModelNames || localModelNames;
+  const readRendererCandidates = deps.rendererCandidates || localRendererCandidates;
+  const fileExists = deps.fileExists || existsSync;
   const fetchImpl = deps.fetchImpl || fetch;
   const configuredRenderer = process.env.PDF_RENDERER_PATH?.trim() || '';
-  const [ollamaPath, rendererPath, hasWord] = await Promise.all([
+  const [ollamaPath, rendererOnPath, hasWord] = await Promise.all([
     findCommand('ollama'),
-    configuredRenderer && existsSync(/* turbopackIgnore: true */ configuredRenderer) ? Promise.resolve(configuredRenderer) : findCommand('pdftoppm'),
+    configuredRenderer && fileExists(/* turbopackIgnore: true */ configuredRenderer) ? Promise.resolve(configuredRenderer) : findCommand('pdftoppm'),
     checkWord(),
   ]);
+  const nativeRendererOnPath = rendererOnPath.toLowerCase().endsWith('.exe') ? rendererOnPath : '';
+  const rendererPath = nativeRendererOnPath || readRendererCandidates().find((candidate) => fileExists(/* turbopackIgnore: true */ candidate)) || '';
 
   let running = false;
   let version = '';
   let installedNames = readLocalModels();
+  const modelSizes = new Map<string, number>();
   try {
     const [versionPayload, tagsPayload] = await Promise.all([
       fetchJson(fetchImpl, `${endpoint}/api/version`),
@@ -100,6 +117,7 @@ export async function discoverDocumentCapabilities(deps: DiscoveryDependencies =
       if (!entry || typeof entry !== 'object') return [];
       const model = entry as { name?: unknown; model?: unknown };
       const name = typeof model.name === 'string' ? model.name : typeof model.model === 'string' ? model.model : '';
+      if (name && typeof (entry as { size?: unknown }).size === 'number') modelSizes.set(name, Number((entry as { size: number }).size));
       return name ? [name] : [];
     })])];
   } catch {
@@ -108,6 +126,7 @@ export async function discoverDocumentCapabilities(deps: DiscoveryDependencies =
 
   const knownCandidates = installedNames.filter((name) => KNOWN_VISION_FAMILIES.some((family) => name.toLowerCase().startsWith(family)));
   const compatibleModels: string[] = [];
+  const completionModels: Array<{ name: string; vision: boolean }> = [];
   if (running) {
     for (const name of installedNames) {
       try {
@@ -118,6 +137,7 @@ export async function discoverDocumentCapabilities(deps: DiscoveryDependencies =
         });
         const capabilities = Array.isArray(shown.capabilities) ? shown.capabilities : [];
         if (capabilities.includes('vision')) compatibleModels.push(name);
+        if (capabilities.includes('completion')) completionModels.push({ name, vision: capabilities.includes('vision') });
       } catch {
         // One corrupt or incompatible model must not hide other installed candidates.
       }
@@ -125,6 +145,11 @@ export async function discoverDocumentCapabilities(deps: DiscoveryDependencies =
   }
   const installedCandidates = [...new Set([...compatibleModels, ...knownCandidates])];
   const model = compatibleModels[0] || '';
+  const synthesisCandidates = completionModels.sort((left, right) => {
+    if (left.vision !== right.vision) return left.vision ? 1 : -1;
+    return (modelSizes.get(left.name) ?? Number.MAX_SAFE_INTEGER) - (modelSizes.get(right.name) ?? Number.MAX_SAFE_INTEGER);
+  }).map((item) => item.name);
+  const synthesisModel = synthesisCandidates[0] || model;
   const detail = model
     ? `Local vision ready with ${model}`
     : running
@@ -142,6 +167,12 @@ export async function discoverDocumentCapabilities(deps: DiscoveryDependencies =
     },
     ollama: { installed: Boolean(ollamaPath), running, endpoint, ...(version ? { version } : {}) },
     vision: { available: Boolean(model), installedCandidates, model, detail },
+    synthesis: {
+      available: Boolean(synthesisModel),
+      installedCandidates: synthesisCandidates,
+      model: synthesisModel,
+      detail: synthesisModel ? `Local brief synthesis ready with ${synthesisModel}` : 'No local completion model is available.',
+    },
   };
 }
 

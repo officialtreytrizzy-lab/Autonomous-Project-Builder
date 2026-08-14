@@ -62,6 +62,7 @@ test('desktop paths keep writable state outside packaged resources', () => {
   });
 
   assert.equal(paths.serverPath, join('C:\\Program Files\\Autonomous Project Builder\\resources', 'builder', 'server.js'));
+  assert.equal(paths.buildWorker, join('C:\\Program Files\\Autonomous Project Builder\\resources', 'builder-worker', 'build-worker.mjs'));
   assert.equal(paths.stateDb, join('C:\\Users\\tester\\AppData\\Roaming\\Autonomous Project Builder', 'state', 'state.db'));
   assert.equal(paths.projectsRoot, join('C:\\Users\\tester', 'Autonomous-Builder-Projects'));
   assert.equal(paths.logDirectory, join('C:\\Users\\tester\\AppData\\Roaming\\Autonomous Project Builder', 'logs'));

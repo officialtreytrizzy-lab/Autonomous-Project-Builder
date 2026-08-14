@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -94,6 +94,119 @@ function parseBuildRecord(json: string): BuildRecord {
   return record;
 }
 
+
+function readJsonFile<T>(filePath: string): T | null {
+  try { return JSON.parse(readFileSync(filePath, 'utf8')) as T; } catch { return null; }
+}
+
+function workspaceManifestPath(workspace: string) {
+  return join(workspace, '.builder', 'build-record.json');
+}
+
+function persistWorkspaceRecord(record: BuildRecord) {
+  try {
+    const controlDirectory = join(record.workspace, '.builder');
+    if (!existsSync(join(controlDirectory, 'request.md'))) return;
+    mkdirSync(controlDirectory, { recursive: true });
+    writeFileSync(workspaceManifestPath(record.workspace), JSON.stringify(record, null, 2), 'utf8');
+  } catch {
+    // The SQLite record remains authoritative. Workspace mirroring is recovery insurance only.
+  }
+}
+
+function legacyWorkspaceRecord(workspace: string): BuildRecord | null {
+  const control = join(workspace, '.builder');
+  const handoffPath = join(control, 'chatgpt-handoff.json');
+  if (!existsSync(handoffPath)) return null;
+  const handoff = readJsonFile<Record<string, unknown>>(handoffPath);
+  const id = typeof handoff?.buildId === 'string' ? handoff.buildId : '';
+  if (!id.startsWith('build-')) return null;
+
+  const completionPath = join(control, 'completion.json');
+  const completion = existsSync(completionPath) ? readJsonFile<Record<string, unknown>>(completionPath) : null;
+  const heartbeat = readJsonFile<Record<string, unknown>>(join(control, 'worker-heartbeat.json'));
+  const prompt = existsSync(join(control, 'request.md')) ? readFileSync(join(control, 'request.md'), 'utf8') : '';
+  const goalMatch = prompt.match(/GOAL\r?\n([\s\S]*?)\r?\n\r?\nPROJECT NAME\r?\n/);
+  const nameMatch = prompt.match(/PROJECT NAME\r?\n([^\r\n]+)/);
+  const submittedAt = typeof handoff?.submittedAt === 'string' ? handoff.submittedAt : statSync(handoffPath).mtime.toISOString();
+  const terminalStatus = completion?.status === 'complete' || completion?.status === 'blocked' || completion?.status === 'failed'
+    ? completion.status as BuildStatus
+    : 'interrupted';
+  const completedAt = completion && existsSync(completionPath) ? statSync(completionPath).mtime.toISOString() : null;
+  const verification = Array.isArray(completion?.verification) ? completion.verification as VerificationCheck[] : [];
+  const repairs = Array.isArray(completion?.repairs) ? completion.repairs : [];
+  const appUrl = typeof completion?.appUrl === 'string' ? completion.appUrl : '';
+  const threadUrl = typeof handoff?.url === 'string' ? handoff.url : '';
+  const heartbeatStage = typeof heartbeat?.stage === 'string' ? heartbeat.stage : 'recovery';
+
+  return {
+    id,
+    projectId: `project-recovered-${id.replace(/^build-/, '').slice(0, 12)}`,
+    planId: '',
+    jobId: '',
+    requestedGoal: goalMatch?.[1]?.trim() || '',
+    request: {
+      name: nameMatch?.[1]?.trim() || 'Recovered local project',
+      objective: goalMatch?.[1]?.trim() || '',
+      deployment: 'local',
+      backend: 'none',
+      workflow: 'none',
+      needsWindowsHost: true,
+    },
+    analysis: {
+      request: {
+        name: nameMatch?.[1]?.trim() || 'Recovered local project',
+        objective: goalMatch?.[1]?.trim() || '',
+        deployment: 'local',
+        backend: 'none',
+        workflow: 'none',
+        needsWindowsHost: true,
+      },
+      ingredients: [],
+      steps: [],
+      stage: terminalStatus === 'interrupted' ? 'running' : terminalStatus === 'complete' ? 'complete' : 'failed',
+      blockingCount: 0,
+      greenCount: 0,
+      yellowCount: 0,
+      redCount: 0,
+      canContinue: true,
+      recoveredFromWorkspace: true,
+    },
+    status: terminalStatus,
+    currentStage: terminalStatus === 'interrupted' ? heartbeatStage : terminalStatus,
+    currentStep: completion ? 'Recovered completion evidence from workspace' : 'Recovered interrupted ChatGPT/MCP execution from workspace',
+    executionTarget: 'computer-2',
+    createdAt: submittedAt,
+    startedAt: submittedAt,
+    updatedAt: completedAt || new Date().toISOString(),
+    finishedAt: terminalStatus === 'interrupted' ? null : (completedAt || new Date().toISOString()),
+    retryCount: 0,
+    repairAttempts: repairs.length,
+    errors: terminalStatus === 'failed' ? [{ timestamp: completedAt || new Date().toISOString(), errorClass: 'workspace-recovery', message: 'Recovered failed build evidence from the project workspace.' }] : [],
+    warnings: ['Recovered from durable workspace evidence after Builder state loss or replacement.'],
+    checkpoints: [{ timestamp: new Date().toISOString(), recoveredFromWorkspace: true, chatgptThreadUrl: threadUrl }],
+    workspace,
+    verification,
+    result: completion?.result ?? null,
+    appUrl,
+  };
+}
+
+export function recoverWorkspaceBuilds(store: BuildStore, projectsRoot: string) {
+  if (!existsSync(projectsRoot)) return [] as string[];
+  const recovered: string[] = [];
+  for (const entry of readdirSync(projectsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const workspace = join(projectsRoot, entry.name);
+    const manifest = readJsonFile<BuildRecord>(workspaceManifestPath(workspace));
+    const record = manifest?.id?.startsWith('build-') ? manifest : legacyWorkspaceRecord(workspace);
+    if (!record || store.get(record.id)) continue;
+    store.restore(record);
+    recovered.push(record.id);
+  }
+  return recovered;
+}
+
 export class BuildStore {
   private database: DatabaseSync;
   private closed = false;
@@ -186,6 +299,12 @@ export class BuildStore {
         updated_at = excluded.updated_at,
         record_json = excluded.record_json
     `).run(record.id, record.status, record.jobId, record.planId, record.updatedAt, JSON.stringify(record));
+    persistWorkspaceRecord(record);
+  }
+
+  restore(record: BuildRecord) {
+    this.write(record);
+    return record;
   }
 
   get(id: string): BuildRecord | null {
@@ -243,6 +362,7 @@ export function getBuildStore() {
   if (!globalStore.__autonomousBuildStore) {
     const databasePath = process.env.BUILDER_STATE_DB?.trim() || join(process.cwd(), '.builder', 'state.db');
     globalStore.__autonomousBuildStore = new BuildStore(databasePath);
+    recoverWorkspaceBuilds(globalStore.__autonomousBuildStore, defaultProjectsRoot());
   }
   return globalStore.__autonomousBuildStore;
 }

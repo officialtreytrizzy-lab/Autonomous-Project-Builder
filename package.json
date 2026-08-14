@@ -20,6 +20,8 @@
     "desktop:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-desktop.ps1",
     "service:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-builder-service.ps1",
     "intake:worker:build": "node scripts/build-intake-worker.mjs",
+    "fixtures:intake": "node tests/fixtures/create-intake-fixtures.mjs",
+    "test:e2e": "playwright test tests/e2e/premium-builder.spec.mjs --project=chromium",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types tests/*.test.mjs"
@@ -41,14 +43,17 @@
     "zod": "latest"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "docx": "9.7.1",
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
     "esbuild": "0.28.2",
     "eslint": "latest",
     "eslint-config-next": "latest",
+    "pdf-lib": "1.17.1",
     "sharp": "0.35.3",
     "typescript": "latest"
   }

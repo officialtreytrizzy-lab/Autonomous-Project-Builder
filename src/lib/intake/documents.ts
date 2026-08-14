@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import mammoth from 'mammoth';
 
@@ -53,7 +53,14 @@ function derivedRevisionPath(source: StoredSourceManifestItem) {
 
 async function extractPdf(source: StoredSourceManifestItem) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const standardFontDataUrl = `${pathToFileURL(join(process.cwd(), 'node_modules', 'pdfjs-dist', 'standard_fonts')).href}/`;
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  const packagedFonts = join(moduleDirectory, 'standard_fonts');
+  const standardFonts = existsSync(packagedFonts)
+    ? packagedFonts
+    : join(process.cwd(), 'node_modules', 'pdfjs-dist', 'standard_fonts');
+  const packagedWorker = join(moduleDirectory, 'pdf.worker.mjs');
+  if (existsSync(packagedWorker)) pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(packagedWorker).href;
+  const standardFontDataUrl = `${pathToFileURL(standardFonts).href}/`;
   const loading = pdfjs.getDocument({ data: new Uint8Array(readFileSync(source.localPath)), standardFontDataUrl, useSystemFonts: true });
   const pdf = await loading.promise;
   const pageNativeText: string[] = [];
@@ -112,7 +119,7 @@ export async function extractDocument(source: StoredSourceManifestItem, deps: Ex
     const outputDirectory = derivedRevisionPath(source);
     mkdirSync(outputDirectory, { recursive: true });
     const pdfPath = join(outputDirectory, 'fixed-layout.pdf');
-    await (deps.convertWordToPdf || convertWordToPdf)(source.localPath, pdfPath);
+    if (!existsSync(pdfPath)) await (deps.convertWordToPdf || convertWordToPdf)(source.localPath, pdfPath);
     const pdfSource = { ...source, localPath: pdfPath, normalizedFilename: 'fixed-layout.pdf' };
     const pages = await extractPdf(pdfSource);
     return {

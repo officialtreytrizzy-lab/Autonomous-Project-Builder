@@ -57,3 +57,14 @@ test('restart mode waits for state reconciliation before rendering the real spin
   assert.match(buildMode, /if \(!reconciled\)/);
   assert.match(buildMode, /useProjectEvents/);
 });
+
+test('persisted UI renders before recovery calls finish and intake polling cannot overlap', () => {
+  const intakeRoute = readFileSync('src/app/api/intakes/[intakeId]/route.ts', 'utf8');
+  assert.match(page, /void Promise\.allSettled/);
+  assert.match(page, /setTimeout\(poll/);
+  assert.doesNotMatch(page, /setInterval\([^)]*refreshIntake/s);
+  assert.match(page, /selectProject\(project, restoredBuilds, false\)/);
+  assert.match(intakeRoute, /searchParams\.get\('reconcile'\) !== '0'/);
+  assert.match(page, /refreshSequenceRef/);
+  assert.match(page, /sequence !== refreshSequenceRef\.current/);
+});

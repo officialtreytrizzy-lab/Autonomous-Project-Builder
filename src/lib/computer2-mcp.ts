@@ -1,4 +1,4 @@
-﻿import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 export function getComputer2Url() {
@@ -45,18 +45,69 @@ export function parseComputer2Result(result: unknown) {
   try { return JSON.parse(text); } catch { return parseLeadingJson(text) ?? { text }; }
 }
 
+type Computer2Client = Pick<Client, 'connect' | 'callTool' | 'close'>;
+
+function isExpiredSessionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:unknown|expired|invalid|no\s+valid)[^\r\n]{0,80}session\s*id|session\s*id[^\r\n]{0,80}(?:unknown|expired|invalid|no\s+valid)/i.test(message);
+}
+export function createComputer2Caller(options: {
+  url: string;
+  token: string;
+  createClient?: () => Computer2Client;
+  createTransport?: () => unknown;
+}) {
+  const createClient = options.createClient || (() => new Client({ name: 'autonomous-project-builder', version: '0.2.0' }));
+  const createTransport = options.createTransport || (() => new StreamableHTTPClientTransport(new URL(options.url), {
+    requestInit: { headers: { Authorization: `Bearer ${options.token}` } },
+  }));
+  let connectedClient: Computer2Client | null = null;
+  let connection: Promise<Computer2Client> | null = null;
+
+  const getConnectedClient = () => {
+    if (connectedClient) return Promise.resolve(connectedClient);
+    if (connection) return connection;
+    const client = createClient();
+    connection = client.connect(createTransport() as never).then(() => {
+      connectedClient = client;
+      connection = null;
+      return client;
+    }, async (error) => {
+      connection = null;
+      await client.close().catch(() => undefined);
+      throw error;
+    });
+    return connection;
+  };
+
+  return async (tool: string, args: Record<string, unknown> = {}) => {
+    let retriedExpiredSession = false;
+    while (true) {
+      const client = await getConnectedClient();
+      try {
+        return parseComputer2Result(await client.callTool({ name: tool, arguments: args }, undefined, { timeout: 30_000 }));
+      } catch (error) {
+        if (connectedClient === client) connectedClient = null;
+        await client.close().catch(() => undefined);
+        if (!retriedExpiredSession && isExpiredSessionError(error)) {
+          retriedExpiredSession = true;
+          continue;
+        }
+        throw error;
+      }
+    }
+  };
+}
+
+const sharedState = globalThis as typeof globalThis & {
+  __computer2SharedCaller?: { url: string; token: string; call: ReturnType<typeof createComputer2Caller> };
+};
+
 export async function callComputer2(tool: string, args: Record<string, unknown> = {}) {
   const url = getComputer2Url();
   const token = getServiceToken();
-  const client = new Client({ name: 'autonomous-project-builder', version: '0.2.0' });
-  const transport = new StreamableHTTPClientTransport(new URL(url), {
-    requestInit: { headers: { Authorization: `Bearer ${token}` } },
-  });
-
-  await client.connect(transport);
-  try {
-    return parseComputer2Result(await client.callTool({ name: tool, arguments: args }, undefined, { timeout: 120000 }));
-  } finally {
-    await client.close();
+  if (!sharedState.__computer2SharedCaller || sharedState.__computer2SharedCaller.url !== url || sharedState.__computer2SharedCaller.token !== token) {
+    sharedState.__computer2SharedCaller = { url, token, call: createComputer2Caller({ url, token }) };
   }
+  return sharedState.__computer2SharedCaller.call(tool, args);
 }

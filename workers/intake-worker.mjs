@@ -1,5 +1,6 @@
 import { IntakeStore } from '../src/lib/intake/store.ts';
 import { runIntakeWorker } from '../src/lib/intake/worker.ts';
+import { existsSync } from 'node:fs';
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -13,9 +14,17 @@ if (process.argv.includes('--validate')) {
 
 const databasePath = argument('--database');
 const intakeId = argument('--intake');
+const pdfRendererPath = argument('--pdf-renderer');
 if (!databasePath || !intakeId) {
-  process.stderr.write('Usage: intake-worker.mjs --database <path> --intake <id>\n');
+  process.stderr.write('Usage: intake-worker.mjs --database <path> --intake <id> [--pdf-renderer <path>]\n');
   process.exit(2);
+}
+if (pdfRendererPath) {
+  if (!existsSync(pdfRendererPath)) {
+    process.stderr.write(`Configured PDF renderer does not exist: ${pdfRendererPath}\n`);
+    process.exit(2);
+  }
+  process.env.PDF_RENDERER_PATH = pdfRendererPath;
 }
 
 const store = new IntakeStore(databasePath);

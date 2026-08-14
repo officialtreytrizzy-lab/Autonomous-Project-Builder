@@ -43,10 +43,31 @@ test('local vision synthesizes a complete source-grounded build brief without le
   const body = JSON.parse(requests[0].init.body);
   assert.equal(body.model, 'gemma3:4b');
   assert.equal(body.stream, false);
+  assert.equal(body.think, false);
   assert.equal(body.options.temperature, 0);
+  assert.equal(body.options.num_predict, 1024);
   assert.match(body.messages[0].content, /equal first-class evidence/i);
   assert.match(body.messages[0].content, /confirmation precedes payment/i);
   assert.doesNotMatch(body.messages[0].content, /C:\\private/i);
   assert.equal(result.brief.flows[0], 'Guest confirms the order before payment.');
   assert.equal(result.contradictions.length, 1);
+});
+
+test('local vision honors the configured inference timeout', async () => {
+  const client = createOllamaVisionClient({
+    model: 'gemma3:4b',
+    timeoutMs: 20,
+    async fetchImpl(_url, init) {
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+      });
+    },
+  });
+
+  const outcome = await Promise.race([
+    client.inspect({ imagePath: 'package.json', page: 1, nativeText: '', requestOcr: false })
+      .then(() => 'completed', (error) => error?.name || 'error'),
+    new Promise((resolve) => setTimeout(() => resolve('not-aborted'), 250)),
+  ]);
+  assert.equal(outcome, 'TimeoutError');
 });

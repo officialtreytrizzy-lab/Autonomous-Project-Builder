@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import { needsOcr, processDocument } from '../src/lib/intake/documents.ts';
+import { extractDocument, needsOcr, processDocument } from '../src/lib/intake/documents.ts';
 
 const pdfFixture = {
   sourceId: 'source-pdf',
@@ -81,4 +84,30 @@ test('OCR is requested only for pages without useful native text', () => {
   assert.equal(needsOcr({ page: 1, nativeText: 'A readable paragraph describing the complete flow.', imagePath: 'p1.png' }), false);
   assert.equal(needsOcr({ page: 2, nativeText: ' ', imagePath: 'p2.png' }), true);
   assert.equal(needsOcr({ page: 3, nativeText: '\u0000\u0000', imagePath: 'p3.png' }), true);
+});
+
+test('DOCX retry reuses its retained fixed-layout PDF instead of relaunching Word', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'intake-docx-retry-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const originals = join(root, 'intake', 'originals');
+  mkdirSync(originals, { recursive: true });
+  const localPath = join(originals, 'product-brief.docx');
+  copyFileSync(join(process.cwd(), 'tests', 'fixtures', 'intake', 'product-brief.docx'), localPath);
+  let conversions = 0;
+  const source = {
+    ...pdfFixture,
+    sourceId: 'source-docx', revisionId: 'revision-docx-1', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    originalFilename: 'product-brief.docx', normalizedFilename: 'product-brief.docx', localPath, size: statSync(localPath).size,
+  };
+  const deps = {
+    async convertWordToPdf(_sourcePath, outputPath) {
+      conversions += 1;
+      copyFileSync(join(process.cwd(), 'tests', 'fixtures', 'intake', 'ui-requirements.pdf'), outputPath);
+    },
+  };
+
+  await extractDocument(source, deps);
+  await extractDocument(source, deps);
+
+  assert.equal(conversions, 1);
 });

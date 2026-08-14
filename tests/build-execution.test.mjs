@@ -25,10 +25,21 @@ test('execution preparation keeps the goal in a file rather than the shell comma
     assert.match(prepared.command, /launch-build\.ps1/);
     assert.match(readFileSync(prepared.promptPath, 'utf8'), /LOCAL E2E PASS/);
     assert.match(readFileSync(prepared.promptPath, 'utf8'), /Do not use GitHub or Vercel/);
-    assert.match(readFileSync(prepared.scriptPath, 'utf8'), /codex(?:\.cmd|\.exe)?'?[\s]+exec/i);
-    assert.match(readFileSync(prepared.scriptPath, 'utf8'), /--ignore-user-config --ignore-rules/);
-    assert.match(readFileSync(prepared.scriptPath, 'utf8'), /codex\.(?:cmd|exe)/i);
-    assert.match(readFileSync(prepared.scriptPath, 'utf8'), /worker\.pid/);
+    const worker = readFileSync(prepared.scriptPath, 'utf8');
+    const bundledWorker = readFileSync(join(process.cwd(), 'workers', 'build-worker.mjs'), 'utf8');
+    assert.match(readFileSync(prepared.promptPath, 'utf8'), /connected Computer 2 MCP/);
+    assert.match(worker, /build-worker\.mjs/);
+    assert.match(worker, /worker\.pid/);
+    assert.match(bundledWorker, /authenticated_chrome_status/);
+    assert.match(bundledWorker, /authenticated_chrome_navigate/);
+    assert.match(bundledWorker, /authenticated_chrome_snapshot/);
+    assert.match(bundledWorker, /authenticated_chrome_select_tab/);
+    assert.match(bundledWorker, /authenticated_chrome_type/);
+    assert.match(bundledWorker, /authenticated_chrome_press_key/);
+    assert.match(bundledWorker, /Selected browser tab drifted away from the ChatGPT build thread/);
+    assert.equal(/codex(?:\.cmd|\.exe)?\s+exec/i.test(bundledWorker), false);
+    assert.equal(/(?:gemini\.cmd|gemini\.exe)\s/i.test(bundledWorker), false);
+    assert.equal(prepared.worker, 'chatgpt-mcp');
     assert.match(readFileSync(prepared.launcherPath, 'utf8'), /Register-ScheduledTask/);
     assert.match(readFileSync(prepared.launcherPath, 'utf8'), /USERDOMAIN\\\$env:USERNAME/);
     assert.equal(prepared.workspace.startsWith(root), true);
@@ -54,6 +65,7 @@ test('execution failures receive actionable classifications', () => {
     ['Streamable HTTP error: Method Not Allowed', 'transient/network'],
     ['401 Unauthorized', 'authentication'],
     ['429 too many requests', 'rate limit'],
+    ['ChatGPT usage limit reached', 'rate limit'],
     ['Docker daemon unavailable', 'dependency unavailable'],
     ['Missing environment configuration', 'configuration'],
     ['Zod validation failed', 'validation'],

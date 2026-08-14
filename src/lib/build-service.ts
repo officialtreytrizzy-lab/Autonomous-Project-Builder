@@ -5,12 +5,15 @@ import { analyzeBuild, APPROVAL_CONTINUATION_POLICY, type BuildRequest } from '.
 import { BuildStore, defaultProjectsRoot, getBuildStore, type BuildRecord, type BuildStatus } from './build-store.ts';
 import { classifyBuildError, prepareBuildWorkspace, validateCompletionEvidence, writeApprovedBrief, type CompletionEvidence } from './build-execution.ts';
 import { callComputer2 as defaultComputer2Caller } from './computer2-mcp.ts';
+import { callWindmill as defaultWindmillCaller, cancelWindmillJob as defaultCancelWindmillJob, windmillConfigured as defaultWindmillConfigured } from './windmill-mcp.ts';
 import { computeApprovalHash } from './intake/contract.ts';
 import { getIntakeStore, IntakeStore } from './intake/store.ts';
 import type { ApprovalBuildConfiguration, BriefDecision, BuildBrief, SourceManifestItem } from './intake/types.ts';
 import { readWorkerEventBatch } from './intake/worker-events.ts';
 
 type Computer2Caller = (tool: string, args?: Record<string, unknown>) => Promise<unknown>;
+type WindmillCaller = (tool: string, args?: Record<string, unknown>) => Promise<unknown>;
+type WindmillCancel = (jobId: string, reason?: string) => Promise<unknown>;
 
 function pickId(value: unknown, names: string[]) {
   if (!value || typeof value !== 'object') return '';
@@ -42,13 +45,28 @@ export class BuildService {
   private projectsRoot: string;
   private allocatePort: () => Promise<number>;
   private intakeStore?: IntakeStore;
+  private windmillCaller: WindmillCaller;
+  private windmillCancel: WindmillCancel;
+  private windmillConfigured: () => boolean;
 
-  constructor(options: { store: BuildStore; intakeStore?: IntakeStore; callComputer2: Computer2Caller; projectsRoot: string; allocatePort?: () => Promise<number> }) {
+  constructor(options: {
+    store: BuildStore;
+    intakeStore?: IntakeStore;
+    callComputer2: Computer2Caller;
+    projectsRoot: string;
+    allocatePort?: () => Promise<number>;
+    callWindmill?: WindmillCaller;
+    cancelWindmill?: WindmillCancel;
+    windmillConfigured?: () => boolean;
+  }) {
     this.store = options.store;
     this.caller = options.callComputer2;
     this.projectsRoot = options.projectsRoot;
     this.allocatePort = options.allocatePort || allocateProjectPort;
     this.intakeStore = options.intakeStore;
+    this.windmillCaller = options.callWindmill || defaultWindmillCaller;
+    this.windmillCancel = options.cancelWindmill || defaultCancelWindmillJob;
+    this.windmillConfigured = options.windmillConfigured || defaultWindmillConfigured;
   }
 
   private emit(build: BuildRecord, input: {
@@ -193,6 +211,7 @@ export class BuildService {
       });
       this.store.appendLog(build.id, { step: 'job', target: 'computer-2', tool: 'job_submit', result: { jobId, status: 'queued' } });
       this.emit(build, { category: 'stage', stage: 'implementation', severity: 'info', humanMessage: 'Queued autonomous implementation on Computer 2.', technicalPayload: { jobId } });
+      if (analysis.steps.some((step) => step.target === 'windmill')) build = await this.startWindmillOrchestration(build);
       return build;
     } catch (error) {
       const errorClass = classifyBuildError(error);
@@ -217,6 +236,7 @@ export class BuildService {
     let build = this.store.get(buildId);
     if (!build) throw new Error(`Unknown build: ${buildId}`);
     build = this.ingestWorkerEvents(build);
+    build = await this.refreshWindmill(build);
     if (!build.jobId || ['complete', 'failed', 'cancelled', 'blocked'].includes(build.status)) return build;
     try {
       const remote = recordOf(await this.caller('job_status', { job_id: build.jobId }));
@@ -336,6 +356,98 @@ export class BuildService {
     return failed;
   }
 
+  private windmillCheckpoint(build: BuildRecord) {
+    for (let index = build.checkpoints.length - 1; index >= 0; index -= 1) {
+      const checkpoint = build.checkpoints[index];
+      if (typeof checkpoint.windmillJobId === 'string' && checkpoint.windmillJobId) return checkpoint;
+    }
+    return null;
+  }
+
+  private windmillScriptPath(build: BuildRecord) {
+    return `u/admin/autonomous_builder_${build.id.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+  }
+
+  private async startWindmillOrchestration(build: BuildRecord) {
+    if (!this.windmillConfigured()) {
+      const message = 'Windmill orchestration is requested but the local Builder-scoped Windmill MCP is not configured.';
+      const updated = this.store.update(build.id, {
+        errors: [...build.errors, { timestamp: new Date().toISOString(), errorClass: 'configuration', message }],
+      });
+      this.store.appendLog(updated.id, { step: 'windmill', target: 'windmill', errorClass: 'configuration', result: 'degraded', message });
+      return updated;
+    }
+
+    const scriptPath = this.windmillScriptPath(build);
+    const builderPort = Number(process.env.BUILDER_PORT || 3107) || 3107;
+    const statusUrl = `http://host.docker.internal:${builderPort}/api/builds/status?build_id=${encodeURIComponent(build.id)}`;
+    const content = `export async function main() {
+  const statusUrl = ${JSON.stringify(statusUrl)};
+  const terminal = new Set(['complete', 'failed', 'blocked', 'cancelled']);
+  const deadline = Date.now() + 105 * 60 * 1000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(statusUrl, { signal: AbortSignal.timeout(10000) });
+      if (response.ok) {
+        const build = await response.json();
+        if (terminal.has(String(build.status || ''))) {
+          return { buildId: ${JSON.stringify(build.id)}, status: build.status, appUrl: build.appUrl || null, finishedAt: build.finishedAt || null };
+        }
+      }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+  throw new Error('Autonomous Builder Windmill orchestration timed out before the build became terminal.');
+}`;
+
+    try {
+      try { await this.windmillCaller('deleteScriptByPath', { path: scriptPath }); } catch {}
+      await this.windmillCaller('createScript', {
+        path: scriptPath,
+        summary: `Autonomous Builder orchestration for ${build.id}`,
+        description: 'Durable Windmill watcher for a Builder execution that explicitly requires Windmill.',
+        content,
+        language: 'nativets',
+        kind: 'script',
+        deployment_message: `Autonomous Builder ${build.id}`,
+      });
+      const launched = await this.windmillCaller('runScriptByPath', { path: scriptPath });
+      const windmillJobId = typeof launched === 'string' ? launched : pickId(launched, ['id', 'job_id', 'jobId']);
+      if (!windmillJobId) throw new Error('Windmill did not return a durable job id');
+      const updated = this.store.update(build.id, {
+        checkpoints: [...build.checkpoints, { timestamp: new Date().toISOString(), windmillJobId, windmillScriptPath: scriptPath, windmillStatus: 'running' }],
+      });
+      this.store.appendLog(updated.id, { step: 'windmill', target: 'windmill', tool: 'runScriptByPath', result: { jobId: windmillJobId, scriptPath, status: 'running' } });
+      return updated;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const errorClass = classifyBuildError(error);
+      const updated = this.store.update(build.id, { errors: [...build.errors, { timestamp: new Date().toISOString(), errorClass, message }] });
+      this.store.appendLog(updated.id, { step: 'windmill', target: 'windmill', errorClass, repairAction: 'Keep the Computer 2 build running and retry Windmill when durable orchestration is needed', result: 'degraded', message });
+      return updated;
+    }
+  }
+
+  private async refreshWindmill(build: BuildRecord) {
+    const checkpoint = this.windmillCheckpoint(build);
+    const windmillJobId = checkpoint?.windmillJobId;
+    if (typeof windmillJobId !== 'string' || !windmillJobId || !this.windmillConfigured()) return build;
+    try {
+      const job = recordOf(await this.windmillCaller('getJob', { id: windmillJobId, no_logs: true, no_code: true }));
+      const status = job.success === true ? 'succeeded' : job.success === false ? 'failed' : job.running === true ? 'running' : 'queued';
+      if (checkpoint.windmillStatus !== status) {
+        const updated = this.store.update(build.id, {
+          checkpoints: [...build.checkpoints, { timestamp: new Date().toISOString(), windmillJobId, windmillScriptPath: checkpoint.windmillScriptPath, windmillStatus: status }],
+        });
+        this.store.appendLog(updated.id, { step: 'windmill-status', target: 'windmill', tool: 'getJob', result: { jobId: windmillJobId, status } });
+        return updated;
+      }
+    } catch (error) {
+      this.store.appendLog(build.id, { step: 'windmill-status', target: 'windmill', tool: 'getJob', errorClass: classifyBuildError(error), result: 'degraded', message: error instanceof Error ? error.message : String(error) });
+    }
+    return build;
+  }
+
   private readWorkerPid(workspace: string) {
     try {
       const value = Number(readFileSync(join(workspace, '.builder', 'worker.pid'), 'utf8').trim());
@@ -359,7 +471,7 @@ export class BuildService {
           { type: 'command', command: `taskkill /PID ${workerPid} /T /F`, cwd: build.workspace, timeout_ms: 30_000 },
           {
             type: 'command',
-            command: `$builderWorkspace='${workspace}'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($builderWorkspace) -and $_.Name -in @('node.exe','codex.exe') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`,
+            command: `$builderWorkspace='${workspace}'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($builderWorkspace) -and $_.Name -in @('powershell.exe','pwsh.exe','node.exe') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`,
             cwd: build.workspace,
             timeout_ms: 30_000,
           },
@@ -385,6 +497,11 @@ export class BuildService {
     const build = this.store.get(buildId);
     if (!build) throw new Error(`Unknown build: ${buildId}`);
     if (build.jobId) await this.caller('job_cancel', { job_id: build.jobId });
+    const windmill = this.windmillCheckpoint(build);
+    if (typeof windmill?.windmillJobId === 'string' && windmill.windmillJobId) {
+      try { await this.windmillCancel(windmill.windmillJobId, `Builder build ${build.id} was cancelled`); }
+      catch (error) { this.store.appendLog(build.id, { step: 'windmill-cancel', target: 'windmill', errorClass: classifyBuildError(error), result: 'degraded', message: error instanceof Error ? error.message : String(error) }); }
+    }
     await this.terminateWorker(build, 'cancel-worker');
     const cancelled = this.store.update(build.id, { status: 'cancelled', currentStage: 'cancelled', currentStep: 'Cancelled by user', finishedAt: new Date().toISOString() });
     this.store.appendLog(cancelled.id, { step: 'cancel', target: 'computer-2', tool: 'job_cancel', result: 'cancelled' });

@@ -30,6 +30,9 @@ export default function Home() {
   const [reconciled, setReconciled] = useState(false);
   const [fatal, setFatal] = useState('');
   const stageRef = useRef<HTMLDivElement>(null);
+  const userIntentRef = useRef(0);
+  const restoreStartedRef = useRef(false);
+  const refreshSequenceRef = useRef(0);
 
   const refreshProjects = useCallback(async () => {
     const response = await fetch('/api/projects', { cache: 'no-store' });
@@ -47,9 +50,10 @@ export default function Home() {
     return payload.builds;
   }, []);
 
-  const refreshIntake = useCallback(async (intakeId?: string) => {
+  const refreshIntake = useCallback(async (intakeId?: string, expectedIntent = userIntentRef.current, reconcile = true) => {
     if (!intakeId) { setIntake(null); return null; }
-    const response = await fetch(`/api/intakes/${encodeURIComponent(intakeId)}`, { cache: 'no-store' });
+    const sequence = ++refreshSequenceRef.current;
+    const response = await fetch(`/api/intakes/${encodeURIComponent(intakeId)}?reconcile=${reconcile ? '1' : '0'}`, { cache: 'no-store' });
     if (!response.ok) return null;
     const payload = await response.json() as IntakeView;
     if (payload.brief) {
@@ -61,29 +65,35 @@ export default function Home() {
         payload.citations = briefPayload.citations || [];
       }
     }
+    if (userIntentRef.current !== expectedIntent || sequence !== refreshSequenceRef.current) return null;
     setIntake(payload);
     return payload;
   }, []);
 
-  const selectProject = useCallback(async (project: BuilderProject, knownBuilds = builds) => {
+  const selectProject = useCallback(async (project: BuilderProject, knownBuilds = builds, reconcileIntake = true) => {
+    const expectedIntent = userIntentRef.current;
     setSelected(project);
     const associatedBuild = knownBuilds.find((build) => build.projectId === project.id) || null;
     setActiveBuild(associatedBuild);
-    await refreshIntake(project.currentIntakeId);
+    await refreshIntake(project.currentIntakeId, expectedIntent, reconcileIntake);
+    if (userIntentRef.current !== expectedIntent) return;
     setMode(modeFor(project, associatedBuild));
   }, [builds, refreshIntake]);
 
   useEffect(() => {
+    if (restoreStartedRef.current) return;
+    restoreStartedRef.current = true;
     const restore = async () => {
+      const intentAtStart = userIntentRef.current;
       try {
-        await Promise.allSettled([
+        void Promise.allSettled([
           fetch('/api/builds/resume', { method: 'POST' }),
           fetch('/api/intakes/resume', { method: 'POST' }),
         ]);
         const [restoredProjects, restoredBuilds] = await Promise.all([refreshProjects(), refreshBuilds()]);
         const active = restoredBuilds.find((build) => !['complete', 'failed', 'cancelled', 'blocked'].includes(build.status)) || restoredBuilds[0];
         const project = (active && restoredProjects.find((item) => item.id === active.projectId)) || restoredProjects[0] || null;
-        if (project) await selectProject(project, restoredBuilds);
+        if (project && userIntentRef.current === intentAtStart) await selectProject(project, restoredBuilds, false);
       } catch (error) { setFatal(error instanceof Error ? error.message : 'Unable to recover persisted state'); }
       finally { setReconciled(true); }
     };
@@ -92,14 +102,19 @@ export default function Home() {
 
   useEffect(() => {
     if (!intake || !['queued', 'extracting', 'rendering', 'inspecting', 'synthesizing', 'blocked'].includes(intake.intake.status)) return;
-    const timer = window.setInterval(() => void refreshIntake(intake.intake.id).then(async (next) => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      const next = await refreshIntake(intake.intake.id);
       if (next?.brief) {
         const nextProjects = await refreshProjects();
         const project = nextProjects.find((item) => item.id === next.intake.projectId);
         if (project) setSelected(project);
       }
-    }), 2000);
-    return () => window.clearInterval(timer);
+      if (!cancelled) timer = window.setTimeout(poll, 2000);
+    };
+    timer = window.setTimeout(poll, 250);
+    return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
   }, [intake, refreshIntake, refreshProjects]);
 
   useEffect(() => { stageRef.current?.focus({ preventScroll: true }); }, [mode]);
@@ -134,7 +149,7 @@ export default function Home() {
 
   return <main className="builder-environment">
     <div className="ambient ambient-one" /><div className="ambient ambient-two" />
-    <ProjectRail projects={projects} selectedId={selected?.id} activeMode={mode} onSelect={(project) => void selectProject(project)} onNew={() => { setSelected(null); setIntake(null); setActiveBuild(null); setMode('Compose'); }} onMode={requestMode} />
+    <ProjectRail projects={projects} selectedId={selected?.id} activeMode={mode} onSelect={(project) => { userIntentRef.current += 1; void selectProject(project); }} onNew={() => { userIntentRef.current += 1; setSelected(null); setIntake(null); setActiveBuild(null); setMode('Compose'); }} onMode={requestMode} />
     <section className="builder-main">
       <header className="builder-topline"><div className="privacy-mark"><LockKeyhole size={13} /><span>Private local workspace</span></div><SystemHealth /></header>
       <div className="state-ribbon" aria-live="polite"><span>{selected?.name || 'New project'}</span><i />Project state · <strong>{selected?.state || 'draft'}</strong><em>{reconciled ? 'Persisted state reconciled' : 'Recovering persisted state'}</em></div>

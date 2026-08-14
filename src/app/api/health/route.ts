@@ -13,8 +13,9 @@ export async function GET() {
       services,
       degradedCapabilities: readiness.degradedCapabilities,
       unavailableCore: readiness.unavailableCore,
+      httpStatus: readiness.ready ? 200 : 503,
       timestamp: new Date().toISOString(),
     },
-    { status: readiness.ready ? 200 : 503 },
+    { status: 200 },
   );
 }

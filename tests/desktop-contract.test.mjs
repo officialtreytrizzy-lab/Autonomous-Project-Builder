@@ -63,6 +63,7 @@ test('packaged server launch uses Electron as Node without exposing configuratio
     stateDb: 'C:\\Users\\tester\\AppData\\Roaming\\Builder\\state\\state.db',
     projectsRoot: 'C:\\Users\\tester\\Autonomous-Builder-Projects',
     intakeWorker: 'C:\\Program Files\\Builder\\resources\\builder-worker\\intake-worker.mjs',
+    buildWorker: 'C:\\Program Files\\Builder\\resources\\builder-worker\\build-worker.mjs',
     serverEnvironment: { MCP_AUTH_TOKEN: 'server-secret' },
     baseEnvironment: { PATH: 'C:\\Windows\\System32' },
   });
@@ -74,6 +75,7 @@ test('packaged server launch uses Electron as Node without exposing configuratio
   assert.equal(launch.env.BUILDER_STATE_DB.endsWith('state.db'), true);
   assert.equal(launch.env.MCP_AUTH_TOKEN, 'server-secret');
   assert.equal(launch.env.BUILDER_INTAKE_WORKER.endsWith('intake-worker.mjs'), true);
+  assert.equal(launch.env.BUILDER_BUILD_WORKER.endsWith('build-worker.mjs'), true);
   assert.equal(launch.args.join(' ').includes('intake-worker'), false);
   assert.equal(launch.args.join(' ').includes('server-secret'), false);
 });
@@ -169,9 +171,25 @@ test('desktop packaging contract creates NSIS desktop and Start Menu shortcuts',
   assert.equal(config.nsis.shortcutName, 'Autonomous Project Builder');
   assert.equal(config.directories.output, 'dist-desktop');
   assert.equal(config.extraResources.some((entry) => entry.to === 'builder'), true);
+  const builderResources = config.extraResources.find((entry) => entry.to === 'builder');
+  assert.equal(builderResources.filter.includes('**/*'), true);
   assert.equal(config.extraResources.some((entry) => entry.to === 'builder-worker'), true);
+  const workerResources = config.extraResources.find((entry) => entry.to === 'builder-worker');
+  assert.equal(workerResources.filter.includes('pdf.worker.mjs'), true);
+  assert.equal(workerResources.filter.includes('build-worker.mjs'), true);
+  assert.equal(workerResources.filter.includes('standard_fonts/**/*'), true);
   assert.equal(config.files.some((entry) => String(entry).includes('intake/originals')), false);
   assert.equal(config.files.some((entry) => String(entry).includes('.ollama')), false);
+});
+
+test('intake worker build carries the PDF worker and standard fonts needed outside node_modules', () => {
+  const result = spawnSync(process.execPath, [join(process.cwd(), 'scripts', 'build-intake-worker.mjs')], {
+    cwd: process.cwd(), encoding: 'utf8', timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(existsSync(join(process.cwd(), 'dist-worker', 'pdf.worker.mjs')), true);
+  assert.equal(existsSync(join(process.cwd(), 'dist-worker', 'build-worker.mjs')), true);
+  assert.equal(existsSync(join(process.cwd(), 'dist-worker', 'standard_fonts', 'LiberationSans-Regular.ttf')), true);
 });
 
 test('desktop paths resolve the packaged intake worker outside writable project state', () => {
@@ -183,12 +201,14 @@ test('desktop paths resolve the packaged intake worker outside writable project 
     homeDirectory: 'C:\\Users\\tester',
   });
   assert.equal(paths.intakeWorker, 'C:\\Program Files\\Builder\\resources\\builder-worker\\intake-worker.mjs');
+  assert.equal(paths.buildWorker, 'C:\\Program Files\\Builder\\resources\\builder-worker\\build-worker.mjs');
   assert.equal(paths.intakeWorker.startsWith(paths.projectsRoot), false);
 });
 
 test('TypeScript excludes generated desktop release output from repeat builds', () => {
   const config = JSON.parse(readFileSync(join(process.cwd(), 'tsconfig.json'), 'utf8'));
   assert.equal(config.exclude.includes('dist-desktop'), true);
+  assert.equal(config.exclude.includes('tmp'), true);
 });
 
 test('ESLint ignores generated desktop release output', async () => {
