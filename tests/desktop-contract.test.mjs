@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ESLint } from 'eslint';
 
@@ -19,6 +19,7 @@ import {
   validateDesktopBundle,
 } from '../scripts/prepare-desktop.mjs';
 import { generateDesktopIcon } from '../scripts/generate-desktop-icon.mjs';
+import { verifyDesktopPackage } from '../scripts/verify-desktop-package.mjs';
 
 test('health polling accepts only the Autonomous Builder architecture', async () => {
   const result = await waitForCompatibleBuilder({
@@ -173,6 +174,9 @@ test('desktop packaging contract creates NSIS desktop and Start Menu shortcuts',
   assert.equal(config.extraResources.some((entry) => entry.to === 'builder'), true);
   const builderResources = config.extraResources.find((entry) => entry.to === 'builder');
   assert.equal(builderResources.filter.includes('**/*'), true);
+  const nodeModulesResources = config.extraResources.find((entry) => entry.to === 'builder/node_modules');
+  assert.equal(nodeModulesResources.from, '.next/standalone/node_modules');
+  assert.equal(nodeModulesResources.filter.includes('**/*'), true);
   assert.equal(config.extraResources.some((entry) => entry.to === 'builder-worker'), true);
   const workerResources = config.extraResources.find((entry) => entry.to === 'builder-worker');
   assert.equal(workerResources.filter.includes('pdf.worker.mjs'), true);
@@ -270,5 +274,27 @@ test('desktop install helper rejects ambiguous setup artifacts', () => {
     assert.match(`${result.stderr}\n${result.stdout}`, /exactly one/i);
   } finally {
     rmSync(output, { recursive: true, force: true });
+  }
+});
+test('desktop package verifier requires Next runtime and both autonomous workers', () => {
+  const root = mkdtempSync(join(tmpdir(), 'builder-desktop-package-verify-'));
+  try {
+    const resources = join(root, 'resources');
+    mkdirSync(join(resources, 'builder', '.next', 'static'), { recursive: true });
+    mkdirSync(join(resources, 'builder-worker'), { recursive: true });
+    writeFileSync(join(resources, 'builder', 'server.js'), 'server');
+    writeFileSync(join(resources, 'builder-worker', 'intake-worker.mjs'), 'intake');
+    writeFileSync(join(resources, 'builder-worker', 'build-worker.mjs'), 'build');
+
+    assert.throws(() => verifyDesktopPackage(resources), /node_modules.*next/i);
+
+    mkdirSync(join(resources, 'builder', 'node_modules', 'next'), { recursive: true });
+    writeFileSync(join(resources, 'builder', 'node_modules', 'next', 'package.json'), '{}');
+    assert.deepEqual(verifyDesktopPackage(resources), {
+      resourcesDirectory: resolve(resources),
+      requiredPaths: 5,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
