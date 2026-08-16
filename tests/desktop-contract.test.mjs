@@ -207,7 +207,7 @@ test('desktop paths resolve the packaged intake worker outside writable project 
 
 test('TypeScript excludes generated desktop release output from repeat builds', () => {
   const config = JSON.parse(readFileSync(join(projectRoot, 'tsconfig.json'), 'utf8'));
-  for (const directory of ['dist-desktop', 'dist-desktop-fixed', 'dist-worker', 'output', 'build']) {
+  for (const directory of ['dist-desktop', 'dist-desktop-fixed', 'dist-release-*', 'dist-worker', 'output', 'build']) {
     assert.equal(config.exclude.includes(directory), true, `${directory} should be excluded`);
   }
 });

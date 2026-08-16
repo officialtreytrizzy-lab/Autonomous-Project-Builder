@@ -19,3 +19,4 @@ build/desktop-icon.png
 .worktrees/
 .next_build/
 .next_old/
+dist-release-*/
