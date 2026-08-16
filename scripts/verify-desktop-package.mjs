@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 const REQUIRED_PACKAGE_PATHS = [
   ['builder', 'server.js'],
   ['builder', 'node_modules', 'next', 'package.json'],
-  ['builder', '.next', 'static'],
+  ['builder', '.next_build', 'static'],
   ['builder-worker', 'intake-worker.mjs'],
   ['builder-worker', 'build-worker.mjs'],
 ];

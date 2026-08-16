@@ -15,6 +15,7 @@ import {
 } from '../desktop/runtime.mjs';
 import { generateDesktopIcon } from '../scripts/generate-desktop-icon.mjs';
 import { loadDesktopBuilderConfig, prepareDesktopBundle, validateDesktopBundle } from '../scripts/prepare-desktop.mjs';
+import { verifyDesktopPackage } from '../scripts/verify-desktop-package.mjs';
 
 const projectRoot = resolve(import.meta.dirname, '..');
 const nodeExecutable = process.execPath;
@@ -157,6 +158,23 @@ test('staging copies standalone static assets and rejects secret-bearing file ty
   }
 });
 
+test('packaged resource verifier follows the custom Next.js dist directory', () => {
+  const root = tempRoot('builder-package-verify-');
+  try {
+    mkdirSync(join(root, 'builder', 'node_modules', 'next'), { recursive: true });
+    mkdirSync(join(root, 'builder', '.next_build', 'static'), { recursive: true });
+    mkdirSync(join(root, 'builder-worker'), { recursive: true });
+    writeFileSync(join(root, 'builder', 'server.js'), 'console.log("ok")');
+    writeFileSync(join(root, 'builder', 'node_modules', 'next', 'package.json'), '{}');
+    writeFileSync(join(root, 'builder', '.next_build', 'static', 'asset.js'), 'static');
+    writeFileSync(join(root, 'builder-worker', 'intake-worker.mjs'), '');
+    writeFileSync(join(root, 'builder-worker', 'build-worker.mjs'), '');
+    assert.equal(verifyDesktopPackage(root).requiredPaths, 5);
+    assert.equal(existsSync(join(root, 'builder', '.next', 'static')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 test('desktop packaging contract creates NSIS desktop and Start Menu shortcuts', () => {
   const config = loadDesktopBuilderConfig(join(projectRoot, 'desktop-builder.yml'));
   assert.equal(config.win.target, 'nsis');
