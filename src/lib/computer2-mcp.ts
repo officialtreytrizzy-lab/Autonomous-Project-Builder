@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-function getComputer2Url() {
+export function getComputer2Url() {
   return process.env.COMPUTER2_MCP_URL?.trim() || process.env.MCP_MAIN_NODE_URL?.trim() || 'http://127.0.0.1:3000/mcp';
 }
 
@@ -11,152 +11,103 @@ function getServiceToken() {
   return value;
 }
 
-function parseTextResult(result: unknown) {
+function parseLeadingJson(text: string) {
+  const start = text.search(/[\[{]/);
+  if (start < 0) return null;
+  const opening = text[start];
+  const closing = opening === '{' ? '}' : ']';
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') { quoted = true; continue; }
+    if (character === opening) depth += 1;
+    if (character === closing) depth -= 1;
+    if (depth === 0) {
+      try { return JSON.parse(text.slice(start, index + 1)); } catch { return null; }
+    }
+  }
+  return null;
+}
+
+export function parseComputer2Result(result: unknown) {
   const value = result as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
   const text = value.content?.find((item) => item.type === 'text')?.text ?? '';
   if (value.isError) throw new Error(text || 'Computer 2 MCP call failed');
   if (!text) return value;
-  try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) {
+  try { return JSON.parse(text); } catch { return parseLeadingJson(text) ?? { text }; }
+}
+
+type Computer2Client = Pick<Client, 'connect' | 'callTool' | 'close'>;
+
+function isExpiredSessionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:unknown|expired|invalid|no\s+valid)[^\r\n]{0,80}session\s*id|session\s*id[^\r\n]{0,80}(?:unknown|expired|invalid|no\s+valid)/i.test(message);
+}
+export function createComputer2Caller(options: {
+  url: string;
+  token: string;
+  createClient?: () => Computer2Client;
+  createTransport?: () => unknown;
+}) {
+  const createClient = options.createClient || (() => new Client({ name: 'autonomous-project-builder', version: '0.2.0' }));
+  const createTransport = options.createTransport || (() => new StreamableHTTPClientTransport(new URL(options.url), {
+    requestInit: { headers: { Authorization: `Bearer ${options.token}` } },
+  }));
+  let connectedClient: Computer2Client | null = null;
+  let connection: Promise<Computer2Client> | null = null;
+
+  const getConnectedClient = () => {
+    if (connectedClient) return Promise.resolve(connectedClient);
+    if (connection) return connection;
+    const client = createClient();
+    connection = client.connect(createTransport() as never).then(() => {
+      connectedClient = client;
+      connection = null;
+      return client;
+    }, async (error) => {
+      connection = null;
+      await client.close().catch(() => undefined);
+      throw error;
+    });
+    return connection;
+  };
+
+  return async (tool: string, args: Record<string, unknown> = {}) => {
+    let retriedExpiredSession = false;
+    while (true) {
+      const client = await getConnectedClient();
       try {
-        return JSON.parse(match[0]);
-      } catch {}
+        return parseComputer2Result(await client.callTool({ name: tool, arguments: args }, undefined, { timeout: 30_000 }));
+      } catch (error) {
+        if (connectedClient === client) connectedClient = null;
+        await client.close().catch(() => undefined);
+        if (!retriedExpiredSession && isExpiredSessionError(error)) {
+          retriedExpiredSession = true;
+          continue;
+        }
+        throw error;
+      }
     }
-    return { text };
-  }
+  };
 }
 
-/**
- * Error pattern memory for recovery engine.
- * Maps error signatures to successful recovery strategies.
- */
-const recoveryMemory = new Map<string, { strategy: string; lastUsed: number }>();
-
-function errorSignature(tool: string, error: Error): string {
-  const msg = error.message.toLowerCase();
-  if (msg.includes('timeout')) return `${tool}:timeout`;
-  if (msg.includes('econnrefused') || msg.includes('econnreset')) return `${tool}:connection`;
-  if (msg.includes('not found')) return `${tool}:not_found`;
-  if (msg.includes('401') || msg.includes('403') || msg.includes('unauthorized')) return `${tool}:auth`;
-  return `${tool}:unknown`;
-}
-
-function recordRecovery(signature: string, strategy: string) {
-  recoveryMemory.set(signature, { strategy, lastUsed: Date.now() });
-}
-
-function getKnownRecovery(signature: string): string | null {
-  const entry = recoveryMemory.get(signature);
-  if (entry && Date.now() - entry.lastUsed < 30 * 60 * 1000) return entry.strategy;
-  return null;
-}
-
-export type RetryOptions = {
-  maxAttempts?: number;
-  baseDelayMs?: number;
-  maxDelayMs?: number;
-  onRetry?: (attempt: number, error: Error, delayMs: number) => void;
+const sharedState = globalThis as typeof globalThis & {
+  __computer2SharedCaller?: { url: string; token: string; call: ReturnType<typeof createComputer2Caller> };
 };
-
-/**
- * Execute an MCP tool call with exponential backoff retry and recovery tracking.
- */
-export async function callComputer2WithRetry(
-  tool: string,
-  args: Record<string, unknown> = {},
-  options: RetryOptions = {},
-): Promise<{ result: unknown; attempts: number; recovered: boolean }> {
-  const maxAttempts = options.maxAttempts ?? 3;
-  const baseDelay = options.baseDelayMs ?? 1000;
-  const maxDelay = options.maxDelayMs ?? 10000;
-
-  let lastError: Error = new Error('No attempts made');
-  let recovered = false;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const result = await callComputer2(tool, args);
-      if (attempt > 1) {
-        recovered = true;
-        recordRecovery(errorSignature(tool, lastError), `retry_attempt_${attempt}`);
-      }
-      return { result, attempts: attempt, recovered };
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-      const sig = errorSignature(tool, lastError);
-
-      // Check if error is non-retryable (auth, not_found)
-      if (sig.endsWith(':auth') || sig.endsWith(':not_found')) {
-        throw lastError;
-      }
-
-      if (attempt < maxAttempts) {
-        const jitter = Math.random() * 0.3 + 0.85; // 0.85-1.15x
-        const delay = Math.min(baseDelay * Math.pow(2, attempt - 1) * jitter, maxDelay);
-        options.onRetry?.(attempt, lastError, delay);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
-}
-
-/**
- * Try a primary tool, then fall back to alternates if available.
- */
-export async function callComputer2WithFallback(
-  primaryTool: string,
-  args: Record<string, unknown>,
-  fallbackTools: string[],
-  retryOptions?: RetryOptions,
-): Promise<{ result: unknown; tool: string; attempts: number; recovered: boolean; usedFallback: boolean }> {
-  // Try primary with retry
-  try {
-    const primary = await callComputer2WithRetry(primaryTool, args, retryOptions);
-    return { ...primary, tool: primaryTool, usedFallback: false };
-  } catch (primaryError) {
-    // Try fallback tools in order
-    for (const fallbackTool of fallbackTools) {
-      try {
-        const fallback = await callComputer2WithRetry(fallbackTool, args, { maxAttempts: 1 });
-        const sig = errorSignature(primaryTool, primaryError instanceof Error ? primaryError : new Error(String(primaryError)));
-        recordRecovery(sig, `fallback:${fallbackTool}`);
-        return { ...fallback, tool: fallbackTool, usedFallback: true };
-      } catch {
-        // Continue to next fallback
-      }
-    }
-    throw primaryError;
-  }
-}
-
-/**
- * Get recovery memory stats for telemetry/debugging.
- */
-export function getRecoveryStats(): { totalRecoveries: number; patterns: Array<{ signature: string; strategy: string }> } {
-  const patterns: Array<{ signature: string; strategy: string }> = [];
-  for (const [sig, entry] of recoveryMemory) {
-    patterns.push({ signature: sig, strategy: entry.strategy });
-  }
-  return { totalRecoveries: patterns.length, patterns };
-}
 
 export async function callComputer2(tool: string, args: Record<string, unknown> = {}) {
   const url = getComputer2Url();
   const token = getServiceToken();
-  const client = new Client({ name: 'autonomous-project-builder', version: '0.2.0' });
-  const transport = new StreamableHTTPClientTransport(new URL(url), {
-    requestInit: { headers: { Authorization: `Bearer ${token}` } },
-  });
-
-  await client.connect(transport);
-  try {
-    return parseTextResult(await client.callTool({ name: tool, arguments: args }, undefined, { timeout: 120000 }));
-  } finally {
-    await client.close();
+  if (!sharedState.__computer2SharedCaller || sharedState.__computer2SharedCaller.url !== url || sharedState.__computer2SharedCaller.token !== token) {
+    sharedState.__computer2SharedCaller = { url, token, call: createComputer2Caller({ url, token }) };
   }
+  return sharedState.__computer2SharedCaller.call(tool, args);
 }

@@ -1,0 +1,62 @@
+{
+  "appId": "com.trizzy.autonomous-project-builder",
+  "productName": "Autonomous Project Builder",
+  "artifactName": "Autonomous-Project-Builder-Setup-${version}.${ext}",
+  "asar": true,
+  "npmRebuild": false,
+  "directories": {
+    "output": "dist-desktop"
+  },
+  "files": [
+    "desktop/**/*",
+    "package.json",
+    "!node_modules/**/*",
+    "!.builder/**/*",
+    "!.env*",
+    "!**/*.log",
+    "!**/*.db",
+    "!**/*.sqlite*",
+    "!.vercel/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": ".next_build/standalone",
+      "to": "builder",
+      "filter": [
+        "**/*"
+      ]
+    },
+
+    {
+      "from": ".next_build/standalone/node_modules",
+      "to": "builder/node_modules",
+      "filter": [
+        "**/*"
+      ]
+    },
+    {
+      "from": "dist-worker",
+      "to": "builder-worker",
+      "filter": [
+        "intake-worker.mjs",
+        "build-worker.mjs",
+        "pdf.worker.mjs",
+        "standard_fonts/**/*"
+      ]
+    }
+  ],
+  "win": {
+    "target": "nsis",
+    "icon": "build/desktop-icon.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Autonomous Project Builder",
+    "deleteAppDataOnUninstall": false,
+    "runAfterFinish": true
+  }
+}

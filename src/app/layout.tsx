@@ -1,11 +1,15 @@
 import type { Metadata } from 'next';
+import '@fontsource-variable/sora';
+import '@fontsource-variable/manrope';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/500.css';
 import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Autonomous Project Builder',
-  description: 'Hybrid Docker MCP and Computer 2 autonomous build control plane',
+  description: 'Private local autonomous software builder for Computer 2',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en" data-theme="night"><body>{children}</body></html>;
 }

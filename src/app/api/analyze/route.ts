@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { analyzeBuild } from '@/lib/builder';
-import { validateIngredients } from '@/lib/validator';
+import { analyzeBuild, applyCapabilityHealth } from '@/lib/builder';
+import { collectHealthReport } from '@/lib/health';
 
 const schema = z.object({
   name: z.string().trim().max(120).optional(),
@@ -17,24 +17,13 @@ const schema = z.object({
 export async function POST(request: NextRequest) {
   try {
     const body = schema.parse(await request.json());
-    const staticAnalysis = analyzeBuild(body);
-
-    try {
-      const validatedIngredients = await validateIngredients(body);
-      if (validatedIngredients.length > 0) {
-        staticAnalysis.ingredients = validatedIngredients;
-        staticAnalysis.greenCount = validatedIngredients.filter((i) => i.level === 'green').length;
-        staticAnalysis.yellowCount = validatedIngredients.filter((i) => i.level === 'yellow').length;
-        staticAnalysis.redCount = validatedIngredients.filter((i) => i.level === 'red').length;
-        staticAnalysis.blockingCount = validatedIngredients.filter((i) => i.level === 'red' && i.blocking).length;
-        staticAnalysis.canContinue = staticAnalysis.blockingCount === 0;
-        staticAnalysis.stage = staticAnalysis.canContinue ? 'ready' : 'blocked';
-      }
-    } catch {
-      // Fallback to static analysis seamlessly
-    }
-
-    return NextResponse.json(staticAnalysis);
+    const { services } = await collectHealthReport();
+    return NextResponse.json(applyCapabilityHealth(analyzeBuild(body), {
+      computer2: services.computer2.ok,
+      dockerGateway: services.dockerGateway.ok,
+      windmill: services.windmill.ok,
+      authenticatedChrome: services.authenticatedChrome.ok,
+    }));
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: 'Invalid build request', issues: error.issues }, { status: 400 });

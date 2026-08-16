@@ -7,6 +7,7 @@
       "esnext"
     ],
     "allowJs": false,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
@@ -33,9 +34,20 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
+    ".next/dev/types/**/*.ts",
+    ".next_dist/types/**/*.ts",
+    ".next_dist/dev/types/**/*.ts",
+    ".next_build/types/**/*.ts",
+    ".next_build/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".builder",
+    "dist-desktop",
+    "dist-desktop-fixed",
+    "dist-worker",
+    "output",
+    "build",
+    "tmp"
   ]
 }

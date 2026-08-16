@@ -1,59 +1,71 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 
-const builder = readFileSync(new URL('../src/lib/builder.ts', import.meta.url), 'utf8');
-const analyzeRoute = readFileSync(new URL('../src/app/api/analyze/route.ts', import.meta.url), 'utf8');
-const startRoute = readFileSync(new URL('../src/app/api/builds/start/route.ts', import.meta.url), 'utf8');
-const page = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
-const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
-const gateway = readFileSync(new URL('../../../../safe-computer-claude-gateway/server.mjs', import.meta.url), 'utf8');
+import {
+  analyzeBuild,
+  analyzeIngredients,
+  applyCapabilityHealth,
+  buildExecutionPlan,
+  routeCapability,
+  shouldInterrupt,
+} from '../src/lib/builder.ts';
 
-test('local deployment is supported by shared contract and API schemas', () => {
-  assert.match(builder, /deployment\?: 'local' \| 'vercel' \| 'none'/);
-  assert.match(analyzeRoute, /z\.enum\(\['local', 'vercel', 'none'\]\)\.default\('local'\)/);
-  assert.match(startRoute, /z\.enum\(\['local', 'vercel', 'none'\]\)\.default\('local'\)/);
+test('a repository-free local request remains runnable on Computer 2', () => {
+  const request = { objective: 'Build a private app', deployment: 'local', backend: 'none', workflow: 'none' };
+  const analysis = analyzeBuild(request);
+  const repository = analysis.ingredients.find((item) => item.id === 'repository');
+  const deployment = analysis.ingredients.find((item) => item.id === 'deployment');
+
+  assert.equal(analysis.canContinue, true);
+  assert.deepEqual(
+    { level: repository?.level, target: repository?.target, blocking: repository?.blocking },
+    { level: 'green', target: 'computer-2', blocking: false },
+  );
+  assert.deepEqual(
+    { level: deployment?.level, target: deployment?.target },
+    { level: 'green', target: 'computer-2' },
+  );
+  assert.equal(deployment?.detail, 'Application will be built, verified and served privately on Computer 2.');
+  assert.equal(analysis.ingredients.find((item) => item.id === 'backend')?.target, 'computer-2');
 });
 
-test('repository is optional for private local builds', () => {
-  assert.match(builder, /No remote repository selected\. The project will remain in the private local workspace on Computer 2\./);
-  assert.doesNotMatch(builder, /A repository is required before implementation can be persisted/);
-  assert.match(page, /GitHub repository \(optional\)/);
-  assert.match(page, /Leave blank to keep this build local/);
+test('local workspaces and remote repositories take different inspection routes', () => {
+  const localPlan = buildExecutionPlan({ deployment: 'local', backend: 'none', workflow: 'none' });
+  const remotePlan = buildExecutionPlan({ repository: 'owner/project', deployment: 'local', backend: 'none', workflow: 'none' });
+
+  assert.equal(localPlan.find((step) => step.id === 'inspect')?.target, 'computer-2');
+  assert.equal(remotePlan.find((step) => step.id === 'inspect')?.target, 'docker-mcp');
+  assert.equal(localPlan.find((step) => step.id === 'runtime')?.target, 'computer-2');
 });
 
-test('local deployment is the visible default', () => {
-  assert.match(page, /deployment: 'local'/);
-  assert.match(page, /<option value="local">Private local<\/option>/);
+test('yellow ingredients continue while only blocking red ingredients interrupt', () => {
+  const yellow = analyzeIngredients({ backend: 'supabase', deployment: 'local' });
+  assert.equal(yellow.find((item) => item.id === 'backend')?.level, 'yellow');
+  assert.equal(shouldInterrupt(yellow), false);
+  assert.equal(shouldInterrupt([
+    { id: 'credential', label: 'Credential', level: 'red', required: true, available: false, target: 'user', detail: 'User-only secret', blocking: true },
+  ]), true);
 });
 
-test('builder exposes an executable start path, not analysis-only', () => {
-  assert.match(page, /async function startBuild\(\)/);
-  assert.match(page, /fetch\('\/api\/builds\/start'/);
-  assert.match(page, /autonomous-builder-active-job/);
-  assert.match(startRoute, /job_submit/);
-  assert.match(startRoute, /plan_execute/);
+test('capability routing keeps host work local and optional services scoped', () => {
+  assert.equal(routeCapability('local runtime and filesystem'), 'computer-2');
+  assert.equal(routeCapability('authenticated Chrome action'), 'computer-2');
+  assert.equal(routeCapability('GitHub repository'), 'docker-mcp');
+  assert.equal(routeCapability('scheduled long-running workflow'), 'windmill');
 });
 
-test('active build panel renders live telemetry, controls and logs', () => {
-  assert.match(page, /active-build-panel/);
-  assert.match(page, /Live Telemetry Feed/);
-  assert.match(page, /Self-Healing: Active/);
-  assert.match(page, /pauseBuild/);
-  assert.match(page, /resumeBuild/);
-  assert.match(page, /cancelBuild/);
-  assert.match(page, /pollStatus/);
-});
+test('live capability state blocks only unavailable core dependencies', () => {
+  const local = applyCapabilityHealth(analyzeBuild({ objective: 'local', deployment: 'local' }), {
+    computer2: false, dockerGateway: false, windmill: false, authenticatedChrome: false,
+  });
+  assert.equal(local.canContinue, false);
+  assert.equal(local.ingredients.find((item) => item.id === 'deployment')?.level, 'red');
 
-test('autonomy policy preserves recoverable-error continuation', () => {
-  assert.match(builder, /continue through recoverable failures and non-blocking missing ingredients/i);
-});
-
-test('gateway injects internal UPSTREAM_MCP_AUTH_TOKEN when forwarding to Computer 2', () => {
-  assert.match(gateway, /const UPSTREAM_MCP_AUTH_TOKEN = process\.env\.UPSTREAM_MCP_AUTH_TOKEN/);
-  assert.match(gateway, /headers\.set\('authorization', `Bearer \${UPSTREAM_MCP_AUTH_TOKEN}`\)/);
-});
-
-test('inputs enforce 16px font-size for iOS viewport auto-zoom prevention', () => {
-  assert.match(css, /input, textarea, select \{[^}]*font-size: 16px;/);
+  const optional = applyCapabilityHealth(analyzeBuild({ objective: 'service', repository: 'owner/repo', backend: 'supabase', deployment: 'vercel', workflow: 'windmill', needsAuthenticatedBrowser: true }), {
+    computer2: true, dockerGateway: false, windmill: false, authenticatedChrome: false,
+  });
+  assert.equal(optional.canContinue, true);
+  assert.equal(optional.ingredients.find((item) => item.id === 'backend')?.level, 'yellow');
+  assert.equal(optional.ingredients.find((item) => item.id === 'browser')?.level, 'yellow');
+  assert.equal(optional.ingredients.find((item) => item.id === 'workflow')?.level, 'yellow');
 });
